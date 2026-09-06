@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>sPot Setup</title>
+  <style>
+    :root {
+      --bg: #191414;
+      --fg: #1DB954;
+      --muted: #b3b3b3;
+      --card: #282828;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: #fff;
+      line-height: 1.45;
+      padding: 1.25rem;
+      max-width: 40rem;
+      margin-inline: auto;
+    }
+    h1 { color: var(--fg); font-size: 1.6rem; margin: 0 0 0.5rem; }
+    h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; color: var(--fg); }
+    .card {
+      background: var(--card);
+      border-radius: 12px;
+      padding: 1rem 1.1rem;
+      margin: 0.75rem 0;
+    }
+    .ok { color: var(--fg); }
+    .bad { color: #f87171; }
+    .muted { color: var(--muted); font-size: 0.9rem; }
+    a.btn, button, input[type=submit] {
+      display: inline-block;
+      background: var(--fg);
+      color: #000;
+      font-weight: 700;
+      border: 0;
+      border-radius: 999px;
+      padding: 0.7rem 1.2rem;
+      text-decoration: none;
+      cursor: pointer;
+      margin: 0.35rem 0.35rem 0.35rem 0;
+      font-size: 1rem;
+    }
+    input[type=text] {
+      width: 100%;
+      padding: 0.7rem;
+      border-radius: 8px;
+      border: 1px solid #444;
+      background: #111;
+      color: #fff;
+      margin: 0.4rem 0;
+    }
+    .error {
+      background: #3f1d1d;
+      color: #fecaca;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      margin: 0.75rem 0;
+    }
+    ul.status { list-style: none; padding: 0; margin: 0; }
+    ul.status li { padding: 0.25rem 0; }
+  </style>
+</head>
+<body>
+  <h1>sPot Setup</h1>
+  <p class="muted">Configure Wi‑Fi (via comitup), Spotify Connect, and library access for your iPod.</p>
+
+  {% if error %}
+  <div class="error">{{ error }}</div>
+  {% endif %}
+
+  <div class="card">
+    <h2>Status</h2>
+    <ul class="status">
+      <li>Wi‑Fi:
+        {% if wifi %}<span class="ok">online</span>{% else %}<span class="bad">offline</span>
+        <span class="muted"> — join the iPod hotspot and use the captive portal</span>{% endif %}
+      </li>
+      <li>Spotify Connect (“{{ device_name }}”):
+        {% if connect_logged_in %}<span class="ok">linked</span>{% else %}<span class="bad">waiting</span>
+        <span class="muted"> — open Spotify on your phone → Devices → {{ device_name }}</span>{% endif %}
+      </li>
+      <li>Web API library:
+        {% if webapi_linked %}<span class="ok">linked</span>{% else %}<span class="bad">not linked</span>{% endif %}
+      </li>
+      <li>Cached library:
+        {% if library %}<span class="ok">ready</span>{% else %}<span class="muted">empty</span>{% endif %}
+      </li>
+      <li>Sync: <span class="muted">{{ sync.state }} — {{ sync.message }} ({{ sync.pct }}%)</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Link Spotify library</h2>
+    {% if not client_id_set %}
+      <p class="bad">Set <code>SPOTIPY_CLIENT_ID</code> in <code>/etc/spotifypod/config.env</code> first.</p>
+    {% else %}
+      <p class="muted">Redirect URI must match your Spotify app:<br/><code>{{ redirect_uri }}</code></p>
+      <a class="btn" href="{{ url_for('spotify_start') }}">Authorize with Spotify</a>
+      <p class="muted" style="margin-top:1rem">If the browser lands on an error page, copy the full URL from the address bar and paste it here:</p>
+      <form method="post" action="{{ url_for('spotify_paste') }}">
+        <input type="text" name="redirect_url" placeholder="https://…?code=…&amp;state=…" />
+        <input type="submit" value="Paste redirect URL" />
+      </form>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Library sync</h2>
+    <form method="post" action="{{ url_for('sync_now') }}">
+      <button type="submit" name="full" value="0">Sync metadata (fast)</button>
+      <button type="submit" name="full" value="1">Full sync (playlist tracks)</button>
+    </form>
+  </div>
+
+  <p class="muted">Portal: {{ portal_url }}</p>
+</body>
+</html>

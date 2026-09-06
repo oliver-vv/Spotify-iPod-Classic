@@ -4,17 +4,20 @@
 
 import tkinter as tk 
 import socket
-import json
 import time
 from datetime import timedelta
 from select import select
-from tkinter import ttk
 from view_model import *
 from PIL import ImageTk, Image
 from sys import platform
 import os
-   
-  
+import setup_state
+
+try:
+    import segno
+except ImportError:
+    segno = None
+
 LARGEFONT =("ChicagoFLF", 90) 
 MED_FONT =("ChicagoFLF", 70) 
 SCALE = 1
@@ -43,6 +46,12 @@ last_button = -1
 last_interaction = time.time()
 screen_on = True
 
+_setup_ready = False
+_setup_poll_at = 0
+
+def _resample():
+    return getattr(Image, "Resampling", Image).LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+
 def screen_sleep():
     global screen_on
     screen_on = False
@@ -56,7 +65,7 @@ def screen_wake():
 def flattenAlpha(img):
     global SCALE
     [img_w, img_h] = img.size
-    img = img.resize((int(img_w * SCALE), int(img_h * SCALE)), Image.ANTIALIAS)
+    img = img.resize((int(img_w * SCALE), int(img_h * SCALE)), _resample())
     alpha = img.split()[-1]  # Pull off the alpha layer
     ab = alpha.tobytes()  # Original 8-bit alpha
 
@@ -78,6 +87,17 @@ def flattenAlpha(img):
     img.putalpha(mask)
 
     return img
+
+def make_qr_image(payload, box_px=4):
+    if not segno or not payload:
+        return None
+    qr = segno.make(payload, error='m')
+    # Render to PIL via PNG bytes
+    from io import BytesIO
+    buf = BytesIO()
+    qr.save(buf, kind='png', scale=box_px, dark=SPOT_GREEN, light=SPOT_BLACK)
+    buf.seek(0)
+    return Image.open(buf).convert('RGBA')
    
 class tkinterApp(tk.Tk): 
       
@@ -91,8 +111,17 @@ class tkinterApp(tk.Tk):
             self.geometry("320x240")
             SCALE = 0.3
         else:
-            self.attributes('-fullscreen', True)
-            SCALE = self.winfo_screenheight() / 930
+            # Bare X / no WM: claim the whole screen
+            self.update_idletasks()
+            w = self.winfo_screenwidth()
+            h = self.winfo_screenheight()
+            self.geometry(f"{w}x{h}+0+0")
+            self.overrideredirect(True)
+            try:
+                self.attributes('-fullscreen', True)
+            except Exception:
+                pass
+            SCALE = max(0.2, h / 930.0)
 
         LARGEFONT =("ChicagoFLF", int(72 * SCALE))
         MED_FONT =("ChicagoFLF", int(52 * SCALE))
@@ -108,7 +137,7 @@ class tkinterApp(tk.Tk):
    
         # iterating through a tuple consisting 
         # of the different page layouts 
-        for F in (StartPage, NowPlayingFrame, SearchFrame): 
+        for F in (StartPage, NowPlayingFrame, SearchFrame, SetupFrame): 
    
             frame = F(container, self) 
    
@@ -215,6 +244,64 @@ class SearchFrame(tk.Frame):
         self.letter_label.configure(text=active_char)
         loading_text = "Loading..." if loading else ""
         self.loading_label.configure(text=loading_text)
+
+class SetupFrame(tk.Frame):
+    def __init__(self, parent, controller):
+        tk.Frame.__init__(self, parent)
+        self.configure(bg=SPOT_BLACK)
+        self.header_label = tk.Label(
+            self, text="Setup", font=LARGEFONT, background=SPOT_BLACK, foreground=SPOT_GREEN
+        )
+        self.header_label.grid(sticky="we", padx=(10, 10), pady=(10, 0))
+        self.grid_columnconfigure(0, weight=1)
+        divider = tk.Canvas(self)
+        divider.configure(
+            bg=SPOT_GREEN, height=DIVIDER_HEIGHT, bd=0, highlightthickness=0, relief="ridge"
+        )
+        divider.grid(row=1, column=0, sticky="we", pady=10, padx=(10, 30))
+        self.detail_label = tk.Label(
+            self,
+            text="",
+            font=MED_FONT,
+            background=SPOT_BLACK,
+            foreground=SPOT_WHITE,
+            wraplength=int(900 * SCALE),
+            justify="center",
+        )
+        self.detail_label.grid(row=2, column=0, sticky="we", padx=20)
+        self.qr_label = tk.Label(self, background=SPOT_BLACK)
+        self.qr_label.grid(row=3, column=0, pady=int(20 * SCALE))
+        self.progress_label = tk.Label(
+            self, text="", font=MED_FONT, background=SPOT_BLACK, foreground=SPOT_GREEN
+        )
+        self.progress_label.grid(row=4, column=0, sticky="we", pady=(10, 20))
+        self._last_qr = None
+
+    def update_setup(self, status):
+        self.header_label.configure(text=status.title)
+        detail = status.detail
+        if len(detail) > 48:
+            detail = detail[:45] + "..."
+        self.detail_label.configure(text=detail)
+        if status.phase == setup_state.SetupPhase.SYNC:
+            self.progress_label.configure(text=f"{status.progress}%")
+        else:
+            self.progress_label.configure(text="")
+        if status.qr_payload and status.qr_payload != self._last_qr:
+            self._last_qr = status.qr_payload
+            img = make_qr_image(status.qr_payload, box_px=max(2, int(3 * SCALE)))
+            if img is not None:
+                # Fit QR to roughly half the short screen edge
+                max_side = int(min(self.winfo_screenwidth(), self.winfo_screenheight()) * 0.45)
+                img.thumbnail((max_side, max_side), _resample())
+                photo = ImageTk.PhotoImage(img)
+                self.qr_label.configure(image=photo)
+                self.qr_label.image = photo
+            else:
+                self.qr_label.configure(image="", text=status.qr_payload[:40])
+        elif not status.qr_payload:
+            self._last_qr = None
+            self.qr_label.configure(image="", text="")
 
 class NowPlayingFrame(tk.Frame): 
     def __init__(self, parent, controller):  
@@ -477,6 +564,10 @@ def render_search(app, search_render):
     app.show_frame(SearchFrame)
     search_render.subscribe(app, update_search)
 
+def render_setup(app, status):
+    app.show_frame(SetupFrame)
+    app.frames[SetupFrame].update_setup(status)
+
 def render_menu(app, menu_render):
     app.show_frame(StartPage)
     page = app.frames[StartPage]
@@ -486,7 +577,9 @@ def render_menu(app, menu_render):
         page.hide_scroll()
     for (i, line) in enumerate(menu_render.lines):
         page.set_list_item(i, text=line.title, line_type = line.line_type, show_arrow = line.show_arrow) 
-    page.set_header(menu_render.header, menu_render.now_playing, menu_render.has_internet)
+    # Prefer NetworkManager-backed wifi when available
+    has_wifi = menu_render.has_internet or setup_state.wifi_online()
+    page.set_header(menu_render.header, menu_render.now_playing, has_wifi)
 
 def update_now_playing(now_playing):
     frame = app.frames[NowPlayingFrame]
@@ -504,13 +597,35 @@ def render(app, render):
     elif (render.type == SEARCH_RENDER):
         render_search(app, render)
 
+def maybe_render_setup(app):
+    """Block the main menu until Wi-Fi, Connect, and Web API linking are done."""
+    global _setup_ready, _setup_poll_at, page
+    if _setup_ready:
+        return False
+    now = time.time()
+    if now < _setup_poll_at:
+        return True
+    _setup_poll_at = now + 1.5
+    status = setup_state.poll()
+    if status.phase == setup_state.SetupPhase.READY:
+        _setup_ready = True
+        page = RootPage(None)
+        render(app, page.render())
+        return False
+    render_setup(app, status)
+    return True
+
 def onPlayPressed():
     global page, app
+    if not _setup_ready:
+        return
     page.nav_play()
     render(app, page.render())
     
 def onSelectPressed():
     global page, app
+    if not _setup_ready:
+        return
     if (not page.has_sub_page):
         return
     page.render().unsubscribe()
@@ -519,6 +634,8 @@ def onSelectPressed():
 
 def onBackPressed():
     global page, app
+    if not _setup_ready:
+        return
     previous_page = page.nav_back()
     if (previous_page):
         page.render().unsubscribe()
@@ -527,30 +644,42 @@ def onBackPressed():
     
 def onNextPressed():
     global page, app
+    if not _setup_ready:
+        return
     page.nav_next()
     render(app, page.render())
 
 def onPrevPressed():
     global page, app
+    if not _setup_ready:
+        return
     page.nav_prev()
     render(app, page.render())
 
 def onUpPressed():
     global page, app
+    if not _setup_ready:
+        return
     page.nav_up()
     render(app, page.render())
 
 def onDownPressed():
     global page, app
+    if not _setup_ready:
+        return
     page.nav_down()
     render(app, page.render())
    
 # Driver Code 
+_frontend_dir = os.path.dirname(os.path.abspath(__file__))
+try:
+    os.chdir(_frontend_dir)
+except Exception:
+    pass
+
 page = RootPage(None)
 app = tkinterApp() 
-render(app, page.render())
-app.overrideredirect(True)
-app.overrideredirect(False)
+
 sock = socket.socket(socket.AF_INET, # Internet
                      socket.SOCK_DGRAM) # UDP
 sock.bind((UDP_IP, UDP_PORT))
@@ -569,13 +698,19 @@ def app_main_loop():
         if (loop_count >= 300):
             if (time.time() - last_interaction > SCREEN_TIMEOUT_SECONDS and screen_on):
                 screen_sleep()
-            render(app, page.render())
+            if not maybe_render_setup(app):
+                render(app, page.render())
             loop_count = 0
-    except:
+        elif loop_count % 50 == 0:
+            maybe_render_setup(app)
+    except Exception:
         pass
     finally:
         app.after(2, app_main_loop)
 
+maybe_render_setup(app)
+if _setup_ready:
+    render(app, page.render())
 app.bind('<KeyPress>', onKeyPress)
 app.after(5, app_main_loop)
 app.mainloop()

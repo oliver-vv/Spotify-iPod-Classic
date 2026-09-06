@@ -2,3 +2,8 @@
 .cache
 .env
 .vscode
+*.pyc
+.venv/
+venv/
+cache.db
+token.json

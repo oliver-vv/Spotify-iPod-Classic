@@ -1,0 +1,15 @@
+[Unit]
+Description=sPot click wheel reader (pigpio UDP :9090)
+After=network.target pigpiod.service
+Wants=pigpiod.service
+
+[Service]
+Type=simple
+ExecStart=/opt/spotifypod/bin/click
+Restart=on-failure
+RestartSec=2
+# pigpio needs root for GPIO alerts
+User=root
+
+[Install]
+WantedBy=multi-user.target

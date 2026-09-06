@@ -1,0 +1,7 @@
+#!/bin/sh
+# Minimal X session for sPot — no window manager.
+cd /opt/spotifypod/frontend || exit 1
+xset s off
+xset s noblank
+xset -dpms
+exec /opt/spotifypod/venv/bin/python spotifypod.py

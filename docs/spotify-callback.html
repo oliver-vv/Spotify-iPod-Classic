@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>sPot Spotify Callback Relay</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 2rem auto; padding: 0 1rem; }
+    code { word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>sPot auth relay</h1>
+  <p id="msg">Forwarding to your iPod…</p>
+  <p class="hint" id="hint" hidden>
+    If nothing happens, copy this URL into the iPod setup page’s “Paste redirect URL” field:
+    <br /><code id="full"></code>
+  </p>
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var state = params.get("state"); // expected: http://ipod.local/spotify/callback or http://IP/...
+      var code = params.get("code");
+      var error = params.get("error");
+      var msg = document.getElementById("msg");
+      var hint = document.getElementById("hint");
+      var full = document.getElementById("full");
+      full.textContent = window.location.href;
+
+      if (error) {
+        msg.textContent = "Spotify returned an error: " + error;
+        hint.hidden = false;
+        return;
+      }
+      if (!code) {
+        msg.textContent = "No authorization code found.";
+        hint.hidden = false;
+        return;
+      }
+      if (!state || !(state.indexOf("http://") === 0 || state.indexOf("https://") === 0)) {
+        msg.textContent = "Missing or invalid state (iPod callback URL). Paste the address bar URL into the portal.";
+        hint.hidden = false;
+        return;
+      }
+      var target = state;
+      var join = target.indexOf("?") >= 0 ? "&" : "?";
+      target = target + join + "code=" + encodeURIComponent(code);
+      // Preserve other query params except state
+      params.forEach(function (v, k) {
+        if (k !== "code" && k !== "state") {
+          target += "&" + encodeURIComponent(k) + "=" + encodeURIComponent(v);
+        }
+      });
+      msg.textContent = "Redirecting to " + state + " …";
+      window.location.replace(target);
+      setTimeout(function () { hint.hidden = false; }, 2500);
+    })();
+  </script>
+</body>
+</html>

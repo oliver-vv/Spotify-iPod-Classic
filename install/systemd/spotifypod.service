@@ -1,0 +1,28 @@
+[Unit]
+Description=sPot tkinter UI on X (fbdev)
+After=click.service go-librespot.service systemd-user-sessions.service
+Wants=click.service go-librespot.service
+Conflicts=carlos.r@example.net
+
+[Service]
+Type=simple
+User=spotifypod
+Group=spotifypod
+Environment=HOME=/var/lib/spotifypod
+Environment=DISPLAY=:0
+EnvironmentFile=-/etc/spotifypod/config.env
+WorkingDirectory=/opt/spotifypod/frontend
+# Claim VT1 for the framebuffer X server
+PAMName=login
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+ExecStartPre=/bin/sleep 2
+ExecStart=/usr/bin/xinit /opt/spotifypod/xinitrc -- :0 -nocursor vt1 -nolisten tcp
+Restart=on-failure
+RestartSec=5
+SupplementaryGroups=video audio
+
+[Install]
+WantedBy=multi-user.target

@@ -1,176 +1,182 @@
-# sPot
+# sPot (2026)
 
-This code is meant to accompany [this project](https://hackaday.io/project/177034-spot-spotify-in-a-4th-gen-ipod-2004) in which a Spotify client is built into an iPod "Classic" from 2004. Everything is meant to run on a Raspberry Pi Zero W.
+Spotify client for a 4th‑generation iPod Classic housing a **Raspberry Pi Zero 2 W**, Waveshare **ST7789V** SPI LCD, and the original click wheel.
 
-Since we are using the lite version of raspbian, some extra packages need to be installed:
+This fork modernizes [dupontgu/retro-ipod-spotify-client](https://github.com/dupontgu/retro-ipod-spotify-client) for current Spotify and Raspberry Pi OS:
 
-# Instructions
+| Old | New |
+|-----|-----|
+| raspotify + username/password | [go-librespot](https://github.com/devgianlu/go-librespot) Zeroconf + persisted credentials |
+| spotipy OAuth + secret | spotipy **≥ 2.26** PKCE (client ID only) |
+| Redis cache | SQLite |
+| fbcp-ili9341 | Kernel `mipi-dbi-spi` + X `fbdev` |
+| Manual `wpa_supplicant` | [comitup](https://davesteele.github.io/comitup/) hotspot + phone Web UI |
+| openbox + lightdm | Bare `xinit` (same tkinter UI look) |
 
-1. Install updates 
+Hardware guides: [Hackaday sPot](https://hackaday.io/project/177034-spot-spotify-in-a-4th-gen-ipod-2004) · [Ricardo’s Waveshare build](http://rsflightronics.com/spotifypod)
 
-```
-sudo apt-get update 
-sudo apt-get upgrade
-```
-2. Install Required Packages.
+**Do not change** [`clickwheel/click.c`](clickwheel/click.c) — it bit-bangs the wheel (GPIO 23/25) and publishes **3-byte UDP packets to `127.0.0.1:9090`**.
 
-Installation for python3-pip, raspotify, python3-tk, openbox
-```
+---
 
-sudo apt install python-setuptools python3-setuptools
+## Requirements
 
-sudo apt install python3-pip
+- Raspberry Pi Zero 2 W
+- Fresh **Raspberry Pi OS Lite 64-bit** (Bookworm or newer)
+- Spotify **Premium** (Connect + Development Mode Web API)
+- A Spotify [Developer Dashboard](https://developer.spotify.com/dashboard) app you own
+- Waveshare-style **2" ST7789V 240×320 SPI** panel (Ricardo pinout by default)
 
-sudo curl -sL https://dtcooper.github.io/raspotify/install.sh | sh
+---
 
-sudo apt-get install python3-tk 
+## 1. Flash and clone
 
-sudo apt-get install redis-server
+1. Flash Raspberry Pi OS Lite 64-bit with Raspberry Pi Imager (enable SSH + Wi‑Fi *or* use the first-boot hotspot later).
+2. Clone this repo on the Pi:
 
-sudo apt-get install openbox
-
-sudo apt install xorg
-
-sudo apt-get install lightdm
-
-sudo apt-get install x11-xserver-utils
-
-```
-3. Install Dependencies
-
-```
-pip3 install -r requirements.txt
-```
-
-4. Install pi-btaudio
-```
-git clone https://github.com/bablokb/pi-btaudio.git
-cd pi-btaudio
-sudo tools/install
-```
-5. Install PiGPIO
-```
-wget https://github.com/joan2937/pigpio/archive/master.zip
-unzip master.zip
-cd pigpio-master
-make
-sudo make install
+```bash
+sudo apt-get update
+sudo apt-get install -y git
+git clone https://github.com/YOUR_USER/Spotify-iPod-Classic.git
+cd Spotify-iPod-Classic
 ```
 
-6. Setup Spotify API
+---
 
-First Create an App at https://developer.spotify.com/dashboard/applications/
-```
-https://accounts.spotify.com/authorize?client_id=XXXXXXXXXXXXXXXXXXXXXXXXXXXXX&response_type=code&redirect_uri=http%3A%2F%2F127.0.0.1&scope=user-read-playback-state%20user-modify-playback-state%20user-read-currently-playing%20	app-remote-control%20streaming%20playlist-modify-public%20playlist-modify-private%20playlist-read-private%20playlist-read-collaborative
-```
+## 2. Spotify developer app
 
+1. Create an app at https://developer.spotify.com/dashboard  
+2. Enable GitHub Pages for this repo’s `/docs` folder (Settings → Pages).  
+3. Add this **Redirect URI** to the Spotify app (must be HTTPS):
 
-7. raspi-config
-
-` sudo raspi-config`
-
-_Console Autologin_
-
-_Display Option -> Screen Blanking -> Off_ if you want to avoid the screen turning black after a few seconds.
-
-
-8. bash_profile
-
-In *.bash_profile* added the following (if the file is not htere, you must create it)
-
-```
-#!/bin/bash
-
-[[ -z $DISPLAY && $XDG_VTNR -eq 1 ]] && startx -- -nocursor
-
-# Disable any form of screen saver / screen blanking / power management
-
-xset s off
-
-xset s noblank
+```text
+https://YOUR_USER.github.io/Spotify-iPod-Classic/spotify-callback.html
 ```
 
-9. Configure xinitrc
+4. Copy the **Client ID** (no client secret needed for PKCE).
 
-`sudo nano /etc/X11/xinit/xinitrc`
+---
 
+## 3. Install
 
-Inside, make sure the following is there:
-```
-#!/bin/sh
-
-# /etc/X11/xinit/xinitrc
-
-# global xinitrc file, used by all X sessions started by xinit (startx)
-
-# invoke global X session script
-
-#. /etc/X11/Xsession
-
-exec openbox-session #-> This is the one that launches Openbox ;)
-```
-10. Run "spotifypod.py" with autostart
-
-`sudo nano /etc/xdg/openbox/autostart`
-
-
-and add the following command to launch spotifypod.py:
-
-```
-cd /home/pi/fork/retro-ipod-spotify-client/frontend/
-
-sudo -H -u pi python3 spotifypod.py &
-
-sudo /home/pi/fork/retro-ipod-spotify-client/clickwheel/click &
+```bash
+sudo bash install/install.sh
 ```
 
-_Make sure that the paths are ok with your setup!!_
+Useful overrides:
 
-in ` sudo nano /etc/xdg/openbox/environment` all the variables needed to run spotifypod.py are set( SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET,SPOTIPY_REDIRECT_URI)
+```bash
+# I2S / USB DAC instead of PipeWire Bluetooth (default)
+sudo AUDIO_BACKEND=alsa bash install/install.sh
 
-```
-export SPOTIPY_CLIENT_ID='your_SPOTIPY_CLIENT_ID'
-
-export SPOTIPY_CLIENT_SECRET='your_SPOTIPY_CLIENT_SECRET'
-
-export SPOTIPY_REDIRECT_URI='your_SPOTIPY_REDIRECT_URI'
-```
-
-11. Synchronizing Spotify data!
-Last but not least, if you want to make sure all your playlists artists, etc are synchronized every time you turn on your Spotypod, you can simply modify the script view_model.py with the following at line 16:
-
-`#spotify_manager.refresh_devices()`
-
-`spotify_manager.refresh_data()`
-
-
-instead of calling refresh_device, you can execute refresh_data. This will sync all your data and then will eceute refresh.devices. This will make the boot up way slower! but it will synchronize every single time you switch on :). 
-If you dont run at least once `refresh_data()` no playlist, artist or anything related with your account will be displayed!
-
-12. Configure Raspotify
-
-`sudo nano /etc/default/raspotify`
-
-
-Uncomment and fill the following line:
-
-`OPTIONS="--username <USERNAME> --password <PASSWORD>"`
-
-
-And maybe you want also to consider the following:
-
-```
-# The displayed device type in Spotify clients. 
-
-# Can be "unknown", "computer", "tablet", "smartphone", "speaker", "tv",
-
-# "avr" (Audio/Video Receiver), "stb" (Set-Top Box), and "audiodongle".
-
-DEVICE_TYPE="smartphone"
+# Display GPIOs if your wiring differs (defaults: DC=24 RESET=27 BL=18)
+# Click wheel keeps GPIO 23 (clock), 25 (data), 26 (haptic) unless you rebuild click.c
+sudo DC_GPIO=24 RESET_GPIO=27 BL_GPIO=18 bash install/install.sh
 ```
 
-# Wiring
+Then edit credentials:
 
-Here is the wiring of the hardware, as of revision 1. Note that the pin numbers correlate to those referenced in [click.c](./clickwheel/click.c)
+```bash
+sudo nano /etc/spotifypod/config.env
+```
 
-![Wiring Diagram](./.docs/sPot_schematic.png)
+Set:
+
+```bash
+SPOTIPY_CLIENT_ID=xxxxxxxx
+SPOTIPY_REDIRECT_URI=https://YOUR_USER.github.io/Spotify-iPod-Classic/spotify-callback.html
+```
+
+Optional: put `ChicagoFLF.ttf` in [`fonts/`](fonts/) and re-run the installer (or `fc-cache`) so menu text matches the classic look.
+
+Reboot:
+
+```bash
+sudo reboot
+```
+
+---
+
+## 4. First boot (phone UX)
+
+The iPod screen walks you through setup with QR codes:
+
+1. **Wi‑Fi** — If offline, comitup raises hotspot `iPod-<nnn>`. Scan the Wi‑Fi QR (or join manually). Captive portal at `http://10.41.0.1` lets you pick your home network.  
+2. **Spotify Connect** — In the Spotify phone app, transfer playback to device **`iPod`**. Credentials persist on disk.  
+3. **Link library** — Scan the QR for `http://ipod.local` (or the Pi’s IP). Tap **Authorize with Spotify**. The HTTPS GitHub Pages page relays `code` back to the Pi. If that fails, use **Paste redirect URL**.  
+4. Library sync starts automatically; then the classic sPot menu appears.
+
+Services (systemd):
+
+- `click.service` — wheel reader (root / pigpio)  
+- `go-librespot.service` — audio + Connect  
+- `spotifypod.service` — tkinter UI on X  
+- `spotifypod-portal.service` — setup web UI  
+
+---
+
+## Architecture
+
+```
+Click wheel ──UDP :9090──► spotifypod.py (tkinter)
+                              │
+                              ├─► go-librespot :3678  (playback / now playing)
+                              ├─► Spotify Web API     (library / search, PKCE)
+                              └─► SQLite cache
+Phone ──QR/captive──► Flask portal :80 ──► token.json + NetworkManager
+```
+
+---
+
+## Display notes (SPI)
+
+Installer appends a `mipi-dbi-spi` snippet to `/boot/firmware/config.txt` and disables `vc4-kms-v3d` so the panel is `/dev/fb0`. Convert the init sequence if needed:
+
+```bash
+# From https://github.com/notro/panel-mipi-dbi/wiki
+mipi-dbi-cmd /lib/firmware/panel.bin install/config/panel.txt
+```
+
+If colours/rotation are wrong, edit MADCTL in [`install/config/panel.txt`](install/config/panel.txt) (`command 0x36 …`) and rebuild `panel.bin`.
+
+---
+
+## Known limitations
+
+- Spotify Development Mode: Premium owner, ≤5 users, shared API quota — prefer **Sync metadata** over constant full syncs.  
+- Playlists you don’t own may be **play-only** (no track list; Web API 403).  
+- Now Playing reflects **this** iPod’s go-librespot session.  
+- Single Wi‑Fi radio: hotspot drops while joining your LAN (comitup handles this).  
+- “New Releases” browse API was removed by Spotify (2026); menu uses **Recently Played** instead.
+
+---
+
+## Local UI development (macOS / desktop)
+
+```bash
+cd frontend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+# Optional: mock player or point GO_LIBRESPOT_URL at a running daemon
+python3 spotifypod.py   # 320×240 window; arrow keys navigate
+```
+
+---
+
+## Wiring reminder
+
+Click wheel (unchanged from upstream `click.c`):
+
+| Signal | BCM GPIO |
+|--------|----------|
+| Clock  | 23 |
+| Data   | 25 |
+| Haptic | 26 |
+
+Default display overlay uses **DC=24, RESET=27, BL=18** — change via `install.sh` env vars if your Waveshare wiring differs.
+
+---
+
+## License
+
+Apache-2.0 (see [LICENSE](LICENSE)). Original project by Guy Dupont / community.

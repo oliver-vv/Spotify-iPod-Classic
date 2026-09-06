@@ -1,19 +1,32 @@
-import spotipy
-import datastore
-from spotipy.oauth2 import SpotifyOAuth
+"""Spotify library (Web API / spotipy PKCE) + local playback (go-librespot)."""
+from __future__ import annotations
+
+import os
 import threading
 import time
-import json
+from typing import Optional
 
-class UserDevice():
-    __slots__ = ['id', 'name', 'is_active']
-    def __init__(self, id, name, is_active):
-        self.id = id
-        self.name = name
-        self.is_active = is_active
+import spotipy
+from spotipy.oauth2 import SpotifyPKCE
 
-class UserTrack():
-    __slots__ = ['title', 'artist', 'album', 'uri']
+import datastore
+import player
+
+# Load /etc/spotifypod/config.env if present (systemd EnvironmentFile also works)
+_ENV_FILE = os.environ.get("SPOTIFYPOD_CONFIG", "/etc/spotifypod/config.env")
+if os.path.isfile(_ENV_FILE):
+    with open(_ENV_FILE) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            os.environ.setdefault(key.strip(), val.strip().strip("'\""))
+
+
+class UserTrack:
+    __slots__ = ["title", "artist", "album", "uri"]
+
     def __init__(self, title, artist, album, uri):
         self.title = title
         self.artist = artist
@@ -23,8 +36,10 @@ class UserTrack():
     def __str__(self):
         return self.title + " - " + self.artist + " - " + self.album
 
-class UserAlbum():
-    __slots__ = ['name', 'artist', 'track_count', 'uri']
+
+class UserAlbum:
+    __slots__ = ["name", "artist", "track_count", "uri"]
+
     def __init__(self, name, artist, track_count, uri):
         self.name = name
         self.artist = artist
@@ -34,8 +49,10 @@ class UserAlbum():
     def __str__(self):
         return self.name + " - " + self.artist
 
-class UserEpisode():
-    __slots__ = ['name', 'publisher', 'show', 'uri']
+
+class UserEpisode:
+    __slots__ = ["name", "publisher", "show", "uri"]
+
     def __init__(self, name, publisher, show, uri):
         self.name = name
         self.publisher = publisher
@@ -45,8 +62,10 @@ class UserEpisode():
     def __str__(self):
         return self.name + " - " + self.publisher
 
-class UserShow():
-    __slots__ = ['name', 'publisher', 'episode_count', 'uri']
+
+class UserShow:
+    __slots__ = ["name", "publisher", "episode_count", "uri"]
+
     def __init__(self, name, publisher, episode_count, uri):
         self.name = name
         self.publisher = publisher
@@ -56,8 +75,10 @@ class UserShow():
     def __str__(self):
         return self.name + " - " + self.publisher
 
-class UserArtist():
-    __slots__ = ['name', 'uri']
+
+class UserArtist:
+    __slots__ = ["name", "uri"]
+
     def __init__(self, name, uri):
         self.name = name
         self.uri = uri
@@ -65,8 +86,10 @@ class UserArtist():
     def __str__(self):
         return self.name
 
-class UserPlaylist(): 
-    __slots__ = ['name', 'idx', 'uri', 'track_count']
+
+class UserPlaylist:
+    __slots__ = ["name", "idx", "uri", "track_count"]
+
     def __init__(self, name, idx, uri, track_count):
         self.name = name
         self.idx = idx
@@ -76,391 +99,594 @@ class UserPlaylist():
     def __str__(self):
         return self.name
 
-class SearchResults():
-    __slots__ = ['tracks', 'artists', 'albums', 'album_track_map']
+
+class SearchResults:
+    __slots__ = ["tracks", "artists", "albums", "album_track_map"]
+
     def __init__(self, tracks, artists, albums, album_track_map):
         self.tracks = tracks
         self.artists = artists
         self.albums = albums
         self.album_track_map = album_track_map
 
-scope = "user-follow-read," \
-        "user-library-read," \
-        "user-library-modify," \
-        "user-modify-playback-state," \
-        "user-read-playback-state," \
-        "user-read-currently-playing," \
-        "app-remote-control," \
-        "playlist-read-private," \
-        "playlist-read-collaborative," \
-        "playlist-modify-public," \
-        "playlist-modify-private," \
-        "streaming"
+
+scope = (
+    "user-follow-read,"
+    "user-library-read,"
+    "user-library-modify,"
+    "user-read-recently-played,"
+    "user-top-read,"
+    "playlist-read-private,"
+    "playlist-read-collaborative,"
+    "playlist-modify-public,"
+    "playlist-modify-private"
+)
+
+DATA_DIR = os.environ.get(
+    "SPOTIFYPOD_DATA_DIR",
+    os.path.expanduser("~/.local/share/spotifypod"),
+)
+TOKEN_PATH = os.environ.get(
+    "SPOTIFYPOD_TOKEN_PATH",
+    os.path.join(DATA_DIR, "token.json"),
+)
+os.makedirs(os.path.dirname(TOKEN_PATH) or ".", exist_ok=True)
 
 DATASTORE = datastore.Datastore()
 
-sp = spotipy.Spotify(auth_manager=SpotifyOAuth(scope=scope))
-
-
 pageSize = 50
 has_internet = False
+sp: Optional[spotipy.Spotify] = None
+_sync_progress = {"state": "idle", "message": "", "pct": 0}
+sleep_time = 0.3
+
+
+def token_path() -> str:
+    return TOKEN_PATH
+
+
+def has_token() -> bool:
+    return os.path.isfile(TOKEN_PATH) and os.path.getsize(TOKEN_PATH) > 10
+
+
+def get_auth_manager() -> SpotifyPKCE:
+    client_id = os.environ.get("SPOTIPY_CLIENT_ID", "")
+    redirect_uri = os.environ.get(
+        "SPOTIPY_REDIRECT_URI",
+        "http://127.0.0.1:8080/callback",
+    )
+    return SpotifyPKCE(
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        scope=scope,
+        cache_path=TOKEN_PATH,
+        open_browser=False,
+    )
+
+
+def init_spotify(force: bool = False) -> Optional[spotipy.Spotify]:
+    global sp
+    if sp is not None and not force:
+        return sp
+    if not has_token() and not os.environ.get("SPOTIPY_CLIENT_ID"):
+        return None
+    try:
+        auth = get_auth_manager()
+        # Validate / refresh token if cache exists
+        if has_token():
+            token = auth.get_cached_token()
+            if not token:
+                # try refresh via validate
+                try:
+                    auth.validate_token(auth.get_access_token(check_cache=True))
+                except Exception:
+                    pass
+        sp = spotipy.Spotify(auth_manager=auth)
+        return sp
+    except Exception as exc:
+        print("init_spotify failed:", exc)
+        sp = None
+        return None
+
 
 def check_internet(request):
     global has_internet
     try:
         result = request()
         has_internet = True
-    except Exception as _:
+        return result
+    except Exception:
         print("no ints")
-        result = None
         has_internet = False
-    return result
+        return None
+
+
+def _client() -> spotipy.Spotify:
+    client = init_spotify()
+    if client is None:
+        raise RuntimeError("Spotify Web API not authenticated")
+    return client
+
 
 def get_playlist(id):
-    # TODO optimize query
-    results = sp.playlist(id)
+    results = _client().playlist(id)
     tracks = []
-    for _, item in enumerate(results['tracks']['items']):
-        track = item['track']
-        tracks.append(UserTrack(track['name'], track['artists'][0]['name'], track['album']['name'], track['uri']))
-    return (UserPlaylist(results['name'], 0, results['uri'], len(tracks)), tracks) # return playlist index as 0 because it won't have a idx parameter when fetching directly from Spotify (and we don't need it here anyway)
+    items = results.get("items") or results.get("tracks", {}).get("items") or []
+    # playlist() may still nest under items/tracks depending on API version
+    if not items and "tracks" in results:
+        items = results["tracks"].get("items") or []
+    for item in items:
+        track = item.get("item") or item.get("track")
+        if not track or track.get("is_local"):
+            continue
+        artists = track.get("artists") or [{"name": "?"}]
+        album = track.get("album") or {"name": "?"}
+        tracks.append(
+            UserTrack(track["name"], artists[0]["name"], album["name"], track["uri"])
+        )
+    return (
+        UserPlaylist(results["name"], 0, results["uri"], len(tracks)),
+        tracks,
+    )
+
 
 def get_show(id):
-    results = sp.show(id)
-    show = results['name']
-    publisher = results['publisher']
+    results = _client().show(id)
+    show = results["name"]
+    publisher = results["publisher"]
     episodes = []
-    for _, item in enumerate(results['episodes']['items']):
-        episodes.append(UserEpisode(item['name'], publisher, show, item['uri']))
-    return (UserShow(results['name'], publisher, len(episodes), results['uri']), episodes)
+    for item in results.get("episodes", {}).get("items") or []:
+        episodes.append(UserEpisode(item["name"], publisher, show, item["uri"]))
+    return (UserShow(results["name"], publisher, len(episodes), results["uri"]), episodes)
+
 
 def get_album(id):
-    # TODO optimize query
-    results = sp.album(id)
-    album = results['name']
-    artist = results['artists'][0]['name']
+    results = _client().album(id)
+    album = results["name"]
+    artist = results["artists"][0]["name"]
     tracks = []
-    for _, item in enumerate(results['tracks']['items']):
-        tracks.append(UserTrack(item['name'], artist, album, item['uri']))
-    return (UserAlbum(results['name'], artist, len(tracks), results['uri']), tracks)
+    for item in results.get("tracks", {}).get("items") or []:
+        tracks.append(UserTrack(item["name"], artist, album, item["uri"]))
+    return (UserAlbum(results["name"], artist, len(tracks), results["uri"]), tracks)
+
+
+def _iter_playlist_items(playlist_id: str):
+    """Yield track dicts from playlist_items; empty on 403 (non-owned)."""
+    try:
+        results = _client().playlist_items(playlist_id, limit=pageSize)
+    except spotipy.SpotifyException as exc:
+        if exc.http_status == 403:
+            print(f"playlist {playlist_id}: 403 (not owned) — play-only")
+            return
+        raise
+    while True:
+        for item in results.get("items") or []:
+            track = item.get("item") or item.get("track")
+            if track and track.get("type") == "track" and not track.get("is_local"):
+                yield track
+            elif track and track.get("type") == "episode":
+                # skip episodes in music playlists for now
+                continue
+        if results.get("next"):
+            results = _client().next(results)
+        else:
+            break
+
 
 def get_playlist_tracks(id):
     tracks = []
-    results = sp.playlist_tracks(id, limit=pageSize)
-    while(results['next']):
-        for _, item in enumerate(results['items']):
-            track = item['track']
-            tracks.append(UserTrack(track['name'], track['artists'][0]['name'], track['album']['name'], track['uri']))
-        results = sp.next(results)
-    for _, item in enumerate(results['items']):
-        track = item['track']
-        tracks.append(UserTrack(track['name'], track['artists'][0]['name'], track['album']['name'], track['uri']))
+    for track in _iter_playlist_items(id):
+        artists = track.get("artists") or [{"name": "?"}]
+        album = track.get("album") or {"name": "?"}
+        tracks.append(
+            UserTrack(track["name"], artists[0]["name"], album["name"], track["uri"])
+        )
     return tracks
+
 
 def get_album_tracks(id):
-    tracks = []
-    results = sp.playlist_tracks(id, limit=pageSize)
-    while(results['next']):
-        for _, item in enumerate(results['items']):
-            track = item['track']
-            tracks.append(UserTrack(track['name'], track['artists'][0]['name'], track['album']['name'], track['uri']))
-        results = sp.next(results)
-    for _, item in enumerate(results['items']):
-        track = item['track']
-        tracks.append(UserTrack(track['name'], track['artists'][0]['name'], track['album']['name'], track['uri']))
+    album, tracks = get_album(id)
     return tracks
 
+
+def ensure_playlist_tracks(playlist) -> list:
+    """Lazy-load playlist tracks into the datastore."""
+    cached = DATASTORE.getPlaylistTracks(playlist.uri)
+    if cached is not None:
+        return cached
+    tracks = get_playlist_tracks(playlist.uri.split(":")[-1])
+    DATASTORE.setPlaylist(playlist, tracks, index=playlist.idx if hasattr(playlist, "idx") else -1)
+    # Update track_count if we discovered items
+    if tracks:
+        playlist.track_count = len(tracks)
+    return tracks
+
+
 def refresh_devices():
-    results = sp.devices()
-    DATASTORE.clearDevices()
-    for _, item in enumerate(results['devices']):
-        if "Spotifypod" in item['name']:
-            print(item['name'])
-            device = UserDevice(item['id'], item['name'], item['is_active'])
-            DATASTORE.setUserDevice(device)
+    """No-op: playback device is local go-librespot, not Web API devices."""
+    return
+
 
 def parse_album(album):
-    artist = album['artists'][0]['name']
+    artist = album["artists"][0]["name"]
     tracks = []
-    if 'tracks' not in album :
-        return get_album(album['id'])
-    for _, track in enumerate(album['tracks']['items']):
-        tracks.append(UserTrack(track['name'], artist, album['name'], track['uri']))
-    return (UserAlbum(album['name'], artist, len(tracks), album['uri']), tracks)
+    if "tracks" not in album:
+        return get_album(album["id"])
+    for track in album["tracks"]["items"]:
+        tracks.append(UserTrack(track["name"], artist, album["name"], track["uri"]))
+    return (UserAlbum(album["name"], artist, len(tracks), album["uri"]), tracks)
+
 
 def parse_show(show):
-    publisher = show['publisher']
+    publisher = show["publisher"]
     episodes = []
-    if 'episodes' not in show :
-        return get_show(show['id'])
-    for _, episode in enumerate(show['episodes']['items']):
-        episodes.append(UserEpisode(episode['name'], publisher, show['name'], episode['uri']))
-    return (UserShow(show['name'], publisher, len(episodes), show['uri']), episodes)
-    
-def refresh_data():
+    if "episodes" not in show:
+        return get_show(show["id"])
+    for episode in show["episodes"]["items"]:
+        episodes.append(
+            UserEpisode(episode["name"], publisher, show["name"], episode["uri"])
+        )
+    return (UserShow(show["name"], publisher, len(episodes), show["uri"]), episodes)
+
+
+def sync_progress():
+    return dict(_sync_progress)
+
+
+def _set_sync(state, message="", pct=0):
+    _sync_progress["state"] = state
+    _sync_progress["message"] = message
+    _sync_progress["pct"] = pct
+
+
+def refresh_data(full: bool = True):
+    """
+    Sync library metadata. Playlist/album *items* are fetched lazily by default
+    (metadata + empty track lists) to stay within Development Mode quota.
+    Pass full=True from the portal "Sync now" to also pull playlist tracks.
+    """
+    if init_spotify() is None:
+        _set_sync("error", "Not authenticated")
+        return
+    _set_sync("running", "Starting…", 0)
     DATASTORE.clear()
-    results = sp.current_user_saved_tracks(limit=pageSize, offset=0)
-    while(results['next']):
-        offset = results['offset']
-        for idx, item in enumerate(results['items']):
-            track = item['track']
-            DATASTORE.setSavedTrack(idx + offset, UserTrack(track['name'], track['artists'][0]['name'], track['album']['name'], track['uri']))
-        results = sp.next(results)
+    client = _client()
 
-    offset = results['offset']
-    for idx, item in enumerate(results['items']):
-        track = item['track']
-        DATASTORE.setSavedTrack(idx + offset, UserTrack(track['name'], track['artists'][0]['name'], track['album']['name'], track['uri']))
+    try:
+        _set_sync("running", "Saved tracks…", 5)
+        results = client.current_user_saved_tracks(limit=pageSize, offset=0)
+        while True:
+            offset = results.get("offset", 0)
+            for idx, item in enumerate(results["items"]):
+                track = item["track"]
+                DATASTORE.setSavedTrack(
+                    idx + offset,
+                    UserTrack(
+                        track["name"],
+                        track["artists"][0]["name"],
+                        track["album"]["name"],
+                        track["uri"],
+                    ),
+                )
+            if results.get("next"):
+                results = client.next(results)
+            else:
+                break
+        print("Spotify tracks fetched")
 
-    print("Spotify tracks fetched")
+        _set_sync("running", "Artists…", 20)
+        offset = 0
+        results = client.current_user_followed_artists(limit=pageSize)
+        while True:
+            for idx, item in enumerate(results["artists"]["items"]):
+                DATASTORE.setArtist(idx + offset, UserArtist(item["name"], item["uri"]))
+            if results["artists"].get("next"):
+                results = client.next(results["artists"])
+                offset += pageSize
+            else:
+                break
+        print("Spotify artists fetched:", DATASTORE.getArtistCount())
 
-    offset = 0
-    results = sp.current_user_followed_artists(limit=pageSize)
-    while(results['artists']['next']):
-        for idx, item in enumerate(results['artists']['items']):
-            DATASTORE.setArtist(idx + offset, UserArtist(item['name'], item['uri']))
-        results = sp.next(results['artists'])
-        offset = offset + pageSize
+        _set_sync("running", "Playlists…", 40)
+        results = client.current_user_playlists(limit=pageSize)
+        totalindex = 0
+        while True:
+            offset = results.get("offset", 0)
+            for idx, item in enumerate(results["items"]):
+                track_count = item.get("tracks", {}).get("total") or 0
+                pl = UserPlaylist(item["name"], totalindex, item["uri"], track_count)
+                if full:
+                    tracks = get_playlist_tracks(item["id"])
+                    if tracks:
+                        pl.track_count = len(tracks)
+                    DATASTORE.setPlaylist(pl, tracks, index=idx + offset)
+                else:
+                    DATASTORE.setPlaylist(pl, None, index=idx + offset)
+                totalindex += 1
+            if results.get("next"):
+                results = client.next(results)
+            else:
+                break
+        print("Spotify playlists fetched:", DATASTORE.getPlaylistCount())
 
-    for idx, item in enumerate(results['artists']['items']):
-        DATASTORE.setArtist(idx + offset, UserArtist(item['name'], item['uri']))
+        _set_sync("running", "Albums…", 65)
+        results = client.current_user_saved_albums(limit=pageSize)
+        while True:
+            offset = results.get("offset", 0)
+            for idx, item in enumerate(results["items"]):
+                album, tracks = parse_album(item["album"])
+                if not full:
+                    tracks = tracks  # album responses usually include tracks
+                DATASTORE.setAlbum(album, tracks, index=idx + offset)
+            if results.get("next"):
+                results = client.next(results)
+            else:
+                break
+        print("Refreshed user albums")
 
-    print("Spotify artists fetched: " + str(DATASTORE.getArtistCount()))
+        _set_sync("running", "Recently played…", 80)
+        try:
+            results = client.current_user_recently_played(limit=50)
+            for idx, item in enumerate(results.get("items") or []):
+                track = item["track"]
+                DATASTORE.setRecentlyPlayed(
+                    UserTrack(
+                        track["name"],
+                        track["artists"][0]["name"],
+                        track["album"]["name"],
+                        track["uri"],
+                    ),
+                    index=idx,
+                )
+        except Exception as exc:
+            print("recently played failed:", exc)
 
-    results = sp.current_user_playlists(limit=pageSize)
-    totalindex = 0 # variable to preserve playlist sort index when calling offset loop down below
-    while(results['next']):
-        offset = results['offset']
-        for idx, item in enumerate(results['items']):
-            tracks = get_playlist_tracks(item['id'])
-            DATASTORE.setPlaylist(UserPlaylist(item['name'], totalindex, item['uri'], len(tracks)), tracks, index=idx + offset)
-            totalindex = totalindex + 1
-        results = sp.next(results)
+        _set_sync("running", "Podcasts…", 90)
+        results = client.current_user_saved_shows(limit=pageSize)
+        if results.get("items"):
+            for idx, item in enumerate(results["items"]):
+                show, episodes = parse_show(item["show"])
+                DATASTORE.setShow(show, episodes, index=idx)
+        print("Spotify Shows fetched")
 
-    offset = results['offset']
-    for idx, item in enumerate(results['items']):
-        tracks = get_playlist_tracks(item['id'])
-        DATASTORE.setPlaylist(UserPlaylist(item['name'], totalindex, item['uri'], len(tracks)), tracks, index=idx + offset)
-        totalindex = totalindex + 1
+        _set_sync("done", "Library synced", 100)
+    except Exception as exc:
+        print("refresh_data error:", exc)
+        _set_sync("error", str(exc), 0)
 
-    print("Spotify playlists fetched: " + str(DATASTORE.getPlaylistCount()))
 
-    results = sp.current_user_saved_albums(limit=pageSize)
-    while(results['next']):
-        offset = results['offset']
-        for idx, item in enumerate(results['items']):
-            album, tracks = parse_album(item['album'])
-            DATASTORE.setAlbum(album, tracks, index=idx + offset)
-        results = sp.next(results)
-
-    offset = results['offset']
-    for idx, item in enumerate(results['items']):
-        album, tracks = parse_album(item['album'])
-        DATASTORE.setAlbum(album, tracks, index=idx + offset)
-
-    print("Refreshed user albums")
-
-    results = sp.new_releases(limit=pageSize)
-    for idx, item in enumerate(results['albums']['items']):
-        album, tracks = parse_album(item)
-        DATASTORE.setNewRelease(album, tracks, index=idx)
-
-    print("Refreshed new releases")
-
-    results = sp.current_user_saved_shows(limit=pageSize)
-    if(len(results['items']) > 0):
-        offset = results['offset']
-        for idx, item in enumerate(results['items']):
-            show, episodes = parse_show(item['show'])
-            DATASTORE.setShow(show, episodes, index=idx)
-
-    print("Spotify Shows fetched")
-
-    refresh_devices()
-    print("Refreshed devices")
-
-def play_artist(artist_uri, device_id = None):
-    if (not device_id):
-        devices = DATASTORE.getAllSavedDevices()
-        if (len(devices) == 0):
-            print("error! no devices")
-            return
-        device_id = devices[0].id
-    response = sp.start_playback(device_id=device_id, context_uri=artist_uri)
+def play_artist(artist_uri, device_id=None):
+    try:
+        player.play(artist_uri)
+    except player.PlayerError as exc:
+        print("play_artist:", exc)
     refresh_now_playing()
-    print(response)
 
-def play_track(track_uri, device_id = None):
-    if (not device_id):
-        devices = DATASTORE.getAllSavedDevices()
-        if (len(devices) == 0):
-            print("error! no devices")
-            return
-        device_id = devices[0].id
-    sp.start_playback(device_id=device_id, uris=[track_uri])
 
-def play_episode(episode_uri, device_id = None):
-    if(not device_id):
-        devices = DATASTORE.getAllSavedDevices()
-        if(len(devices) == 0):
-            print("error! no devices")
-            return
-        device_id = devices[0].id
-    sp.start_playback(device_id=device_id, uris=[episode_uri])
+def play_track(track_uri, device_id=None):
+    try:
+        player.play(track_uri)
+    except player.PlayerError as exc:
+        print("play_track:", exc)
+    refresh_now_playing()
 
-def play_from_playlist(playist_uri, track_uri, device_id = None):
+
+def play_episode(episode_uri, device_id=None):
+    try:
+        player.play(episode_uri)
+    except player.PlayerError as exc:
+        print("play_episode:", exc)
+    refresh_now_playing()
+
+
+def play_from_playlist(playist_uri, track_uri, device_id=None):
     print("playing ", playist_uri, track_uri)
-    if (not device_id):
-        devices = DATASTORE.getAllSavedDevices()
-        if (len(devices) == 0):
-            print("error! no devices")
-            return
-        device_id = devices[0].id
-    sp.start_playback(device_id=device_id, context_uri=playist_uri, offset={"uri": track_uri})
+    try:
+        player.play(playist_uri, skip_to_uri=track_uri)
+    except player.PlayerError as exc:
+        print("play_from_playlist:", exc)
+        # Fallback: play the track alone
+        try:
+            player.play(track_uri)
+        except player.PlayerError as exc2:
+            print(exc2)
     refresh_now_playing()
 
-def play_from_show(show_uri, episode_uri, device_id = None):
+
+def play_from_show(show_uri, episode_uri, device_id=None):
     print("playing ", show_uri, episode_uri)
-    if(not device_id):
-        devices = DATASTORE.getAllSavedDevices()
-        if (len(devices) == 0):
-            print("error! no devices")
-            return
-        device_id = devices[0].id
-    sp.start_playback(device_id=device_id, context_uri=show_uri, offset={"uri": episode_uri})
+    try:
+        player.play(show_uri, skip_to_uri=episode_uri)
+    except player.PlayerError as exc:
+        print("play_from_show:", exc)
+        try:
+            player.play(episode_uri)
+        except player.PlayerError as exc2:
+            print(exc2)
     refresh_now_playing()
+
+
+def _status_to_now_playing(st: dict) -> Optional[dict]:
+    if not st:
+        return None
+    # go-librespot /status shapes differ slightly by version; be defensive.
+    track = st.get("track") or st.get("metadata") or {}
+    uri = track.get("uri") or st.get("uri")
+    name = track.get("name") or st.get("track_name") or st.get("name")
+    if not name and not uri:
+        # Flat fields from websocket-style status
+        if not st.get("track_name") and not st.get("album_name"):
+            # Some versions nest under player
+            player_st = st.get("player") or {}
+            track = player_st.get("track") or track
+            uri = track.get("uri") or uri
+            name = track.get("name") or name
+    if not name and not uri:
+        return None
+
+    artists = track.get("artist_names") or track.get("artists") or []
+    if artists and isinstance(artists[0], dict):
+        artist = artists[0].get("name", "?")
+    elif artists:
+        artist = artists[0]
+    else:
+        artist = st.get("artist") or "?"
+
+    album = track.get("album_name") or track.get("album") or st.get("album") or ""
+    if isinstance(album, dict):
+        album = album.get("name", "")
+
+    duration = (
+        track.get("duration")
+        or track.get("duration_ms")
+        or st.get("duration")
+        or st.get("track_duration")
+        or 0
+    )
+    progress = st.get("position") or st.get("progress") or st.get("track_position") or 0
+    paused = st.get("paused")
+    if paused is None:
+        is_playing = bool(st.get("playing") or st.get("is_playing"))
+    else:
+        is_playing = not paused
+
+    context_uri = st.get("context_uri") or track.get("context_uri")
+    now_playing = {
+        "name": name or "Unknown",
+        "track_uri": uri or "",
+        "artist": artist,
+        "album": album or "",
+        "duration": int(duration),
+        "is_playing": is_playing,
+        "progress": int(progress),
+        "context_name": artist,
+        "track_index": -1,
+        "timestamp": time.time(),
+    }
+
+    if context_uri and "playlist" in context_uri:
+        playlist = DATASTORE.getPlaylistUri(context_uri)
+        tracks = DATASTORE.getPlaylistTracks(context_uri)
+        if playlist and tracks and uri:
+            try:
+                now_playing["track_index"] = (
+                    next(i for i, val in enumerate(tracks) if val.uri == uri) + 1
+                )
+                now_playing["track_total"] = len(tracks)
+                now_playing["context_name"] = playlist.name
+            except StopIteration:
+                pass
+    elif context_uri and "album" in context_uri:
+        album_obj = DATASTORE.getAlbumUri(context_uri)
+        tracks = DATASTORE.getPlaylistTracks(context_uri)
+        if album_obj and tracks and uri:
+            try:
+                now_playing["track_index"] = (
+                    next(i for i, val in enumerate(tracks) if val.uri == uri) + 1
+                )
+                now_playing["track_total"] = len(tracks)
+                now_playing["context_name"] = album_obj.name
+            except StopIteration:
+                pass
+    return now_playing
+
 
 def get_now_playing():
-    response = check_internet(lambda: sp.current_playback(additional_types='episode'))
-    if (not response):
-        return None
+    st = player.status()
+    if st:
+        global has_internet
+        has_internet = True
+        return _status_to_now_playing(st)
+    return None
 
-    if (response['currently_playing_type'] == 'episode'):
-        return get_now_playing_episode(response = response)
-    else:
-        return get_now_playing_track(response = response)
-
-def get_now_playing_track(response = None):
-    if(not response or not response['item']):
-        return None
-
-    context = response['context']
-    track = response['item']
-    track_uri = track['uri']
-    artist = track['artists'][0]['name']
-    now_playing = {
-        'name': track['name'],
-        'track_uri': track_uri,
-        'artist': artist,
-        'album': track['album']['name'],
-        'duration': track['duration_ms'],
-        'is_playing': response['is_playing'],
-        'progress': response['progress_ms'],
-        'context_name': artist,
-        'track_index': -1,
-        'timestamp': time.time()
-    }
-    if not context:
-        return now_playing
-    if (context['type'] == 'playlist'):
-        uri = context['uri']
-        playlist = DATASTORE.getPlaylistUri(uri)
-        tracks = DATASTORE.getPlaylistTracks(uri)
-        if (not playlist):
-            playlist, tracks = get_playlist(uri.split(":")[-1])
-            DATASTORE.setPlaylist(playlist, tracks)
-        now_playing['track_index'] = next(x for x, val in enumerate(tracks) 
-                                  if val.uri == track_uri) + 1
-        now_playing['track_total'] = len(tracks)
-        now_playing['context_name'] = playlist.name
-    elif (context['type'] == 'album'):
-        uri = context['uri']
-        album = DATASTORE.getAlbumUri(uri)
-        tracks = DATASTORE.getPlaylistTracks(uri)
-        if (not album):
-            album, tracks = get_album(uri.split(":")[-1])
-            DATASTORE.setAlbum(album, tracks)
-        now_playing['track_index'] = next(x for x, val in enumerate(tracks) 
-                                  if val.uri == track_uri) + 1
-        now_playing['track_total'] = len(tracks)
-        now_playing['context_name'] = album.name
-    return now_playing
-
-def get_now_playing_episode(response = None):
-    if(not response or not response['item']):
-        return None
-
-    episode = response['item']
-    episode_uri = episode['uri']
-    publisher = episode['show']['publisher']
-    now_playing = {
-        'name': episode['name'],
-        'track_uri': episode_uri,
-        'artist': publisher,
-        'album': episode['show']['name'],
-        'duration': episode['duration_ms'],
-        'is_playing': response['is_playing'],
-        'progress': response['progress_ms'],
-        'context_name': publisher,
-        'track_index': -1,
-        'timestamp': time.time()
-    }
-    
-    return now_playing
 
 def search(query):
-    track_results = sp.search(query, limit=5, type='track')
+    client = _client()
+    limit = 5  # API max for search is now 10; keep UI small
+    track_results = client.search(query, limit=limit, type="track")
     tracks = []
-    for _, item in enumerate(track_results['tracks']['items']):
-        tracks.append(UserTrack(item['name'], item['artists'][0]['name'], item['album']['name'], item['uri']))
-    artist_results = sp.search(query, limit=5, type='artist')
+    for item in track_results["tracks"]["items"]:
+        tracks.append(
+            UserTrack(
+                item["name"],
+                item["artists"][0]["name"],
+                item["album"]["name"],
+                item["uri"],
+            )
+        )
+    artist_results = client.search(query, limit=limit, type="artist")
     artists = []
-    for _, item in enumerate(artist_results['artists']['items']):
-        artists.append(UserArtist(item['name'], item['uri']))
-    album_results = sp.search(query, limit=5, type='album')
+    for item in artist_results["artists"]["items"]:
+        artists.append(UserArtist(item["name"], item["uri"]))
+    album_results = client.search(query, limit=limit, type="album")
     albums = []
     album_track_map = {}
-    for _, item in enumerate(album_results['albums']['items']):
+    for item in album_results["albums"]["items"]:
         album, album_tracks = parse_album(item)
         albums.append(album)
         album_track_map[album.uri] = album_tracks
     return SearchResults(tracks, artists, albums, album_track_map)
 
+
 def refresh_now_playing():
     DATASTORE.now_playing = get_now_playing()
 
+
 def play_next():
     global sleep_time
-    sp.next_track()
+    try:
+        player.next_track()
+    except player.PlayerError as exc:
+        print(exc)
     sleep_time = 0.4
     refresh_now_playing()
+
 
 def play_previous():
     global sleep_time
-    sp.previous_track()
+    try:
+        player.previous_track()
+    except player.PlayerError as exc:
+        print(exc)
     sleep_time = 0.4
     refresh_now_playing()
+
 
 def pause():
     global sleep_time
-    sp.pause_playback()
+    try:
+        player.pause()
+    except player.PlayerError as exc:
+        print(exc)
     sleep_time = 0.4
     refresh_now_playing()
+
 
 def resume():
     global sleep_time
-    sp.start_playback()
+    try:
+        player.resume()
+    except player.PlayerError as exc:
+        print(exc)
     sleep_time = 0.4
     refresh_now_playing()
 
+
 def toggle_play():
     now_playing = DATASTORE.now_playing
-    if not now_playing:
+    try:
+        player.playpause()
+    except player.PlayerError:
+        if not now_playing:
+            return
+        if now_playing.get("is_playing"):
+            pause()
+        else:
+            resume()
         return
-    if now_playing['is_playing']:
-        pause()
-    else:
-        resume()
+    sleep_time = 0.4
+    refresh_now_playing()
+
 
 def bg_loop():
     global sleep_time
@@ -469,10 +695,14 @@ def bg_loop():
         time.sleep(sleep_time)
         sleep_time = min(4, sleep_time * 2)
 
-sleep_time = 0.3
-thread = threading.Thread(target=bg_loop, args=())
-thread.daemon = True                            # Daemonize thread
+
+thread = threading.Thread(target=bg_loop, args=(), daemon=True)
 thread.start()
 
+
 def run_async(fun):
-    threading.Thread(target=fun, args=()).start()
+    threading.Thread(target=fun, args=(), daemon=True).start()
+
+
+# Eager init if token already present
+init_spotify()

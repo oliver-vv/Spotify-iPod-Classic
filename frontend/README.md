@@ -1,26 +1,23 @@
-# Frontend
+# Frontend (sPot UI)
 
-To run: `python3 spotifypod.py`
+Tkinter UI (ChicagoFLF look) driven by UDP click-wheel events on port **9090**.
 
-## Dependencies
+## Modules
 
-First, you'll need to install the dependencies via `pip3`:
+| File | Role |
+|------|------|
+| `spotifypod.py` | UI + UDP input + setup QR screens |
+| `view_model.py` | Menu navigation |
+| `spotify_manager.py` | Web API (spotipy PKCE) + library sync |
+| `player.py` | go-librespot REST client |
+| `datastore.py` | SQLite cache |
+| `setup_state.py` | First-boot Wi‑Fi / Connect / link state |
 
-```sh
-pip3 install -r requirements.txt
+## Dev
+
+```bash
+pip install -r requirements.txt
+python3 spotifypod.py
 ```
 
-For local development on macOS, you need to install redis:
-
-```sh
-brew install redis
-```
-
-## Authentication
-
-You'll need to authenticate with Spotify to get an access token, which will sit in a file called `.cache`.
-
-To generate the `.cache` file, you need the following enviroment variables: `SPOTIPY_CLIENT_ID`, `SPOTIPY_CLIENT_SECRET` and `SPOTIPY_REDIRECT_URI`.
-More information regarding the authentication flow can be found in **spotipy**'s instructions [here](https://spotipy.readthedocs.io/en/2.16.1/#authorization-code-flow).
-
-And to more information how to get a Spotify `CLIENT_ID`, `CLIENT_SECRET` and to set a `REDIRECT_URI` visit the Spotify Docs section *Register Your App* [here](https://developer.spotify.com/documentation/general/guides/app-settings/).
+On macOS the window is 320×240; use arrow keys. Playback needs go-librespot (`GO_LIBRESPOT_URL`, default `http://127.0.0.1:3678`).

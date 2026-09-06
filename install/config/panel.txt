@@ -1,0 +1,22 @@
+# ST7789V init for Waveshare 2" 240x320 SPI panel (Ricardo build)
+# Landscape via MADCTL; width/height in config.txt must match (320x240)
+
+command 0x11
+delay 120
+
+# MADCTL: landscape (MV|MY) + BGR  -> 0xA0 or 0xA8 depending on panel
+command 0x36 0xA0
+
+# Pixel format RGB565
+command 0x3A 0x05
+
+# Column address (0..319)
+command 0x2A 0x00 0x00 0x01 0x3F
+
+# Row address (0..239)
+command 0x2B 0x00 0x00 0x00 0xEF
+
+command 0x21
+command 0x13
+command 0x29
+delay 20

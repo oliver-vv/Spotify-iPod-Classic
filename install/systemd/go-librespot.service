@@ -1,0 +1,17 @@
+[Unit]
+Description=go-librespot Spotify Connect player
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=spotifypod
+Group=spotifypod
+Environment=HOME=/var/lib/spotifypod
+ExecStart=/opt/spotifypod/bin/go-librespot -config_dir /var/lib/spotifypod/go-librespot
+Restart=on-failure
+RestartSec=3
+SupplementaryGroups=audio
+
+[Install]
+WantedBy=multi-user.target

@@ -8,13 +8,12 @@ MENU_PAGE_SIZE = 6
 MENU_RENDER_TYPE = 0
 NOW_PLAYING_RENDER = 1
 SEARCH_RENDER = 2
+SETUP_RENDER = 3
 
 # Menu line item types
 LINE_NORMAL = 0
 LINE_HIGHLIGHT = 1
 LINE_TITLE = 2
-
-spotify_manager.refresh_devices()
 
 class LineItem():
     def __init__(self, title = "", line_type = LINE_NORMAL, show_arrow = False):
@@ -381,15 +380,43 @@ class SearchResultsPage(MenuPage):
             return 2
         return 1
 
-class NewReleasesPage(PlaylistsPage):
+class RecentlyPlayedPage(MenuPage):
     def __init__(self, previous_page):
-        super().__init__(previous_page)
+        super().__init__("Recently Played", previous_page, has_sub_page=True)
+        self.tracks = spotify_manager.DATASTORE.getAllRecentlyPlayed()
 
-    def get_title(self):
-        return "New Releases"
+    def total_size(self):
+        return len(self.tracks)
 
-    def get_content(self):
-        return spotify_manager.DATASTORE.getAllNewReleases()
+    def page_at(self, index):
+        track = self.tracks[index]
+        command = NowPlayingCommand(lambda: spotify_manager.play_track(track.uri))
+        return NowPlayingPage(self, track.title, command)
+
+class SyncLibraryPage(MenuPage):
+    def __init__(self, previous_page):
+        super().__init__("Sync Library", previous_page, has_sub_page=True)
+
+    def nav_select(self):
+        spotify_manager.run_async(lambda: spotify_manager.refresh_data(full=False))
+        return self
+
+    def render(self):
+        sync = spotify_manager.sync_progress()
+        msg = sync.get("message") or "Select to refresh"
+        if sync.get("state") == "running":
+            msg = f"Syncing {sync.get('pct', 0)}%"
+        elif sync.get("state") == "done":
+            msg = "Synced — select again"
+        lines = [LineItem(msg[:20], LINE_HIGHLIGHT, False)]
+        for _ in range(MENU_PAGE_SIZE - 1):
+            lines.append(EMPTY_LINE_ITEM)
+        return MenuRendering(
+            lines=lines,
+            header=self.header,
+            page_start=0,
+            total_count=1,
+        )
 
 class ArtistsPage(MenuPage):
     def __init__(self, previous_page):
@@ -424,15 +451,30 @@ class SinglePlaylistPage(MenuPage):
 
     def get_tracks(self):
         if self.tracks is None:
-            self.tracks = spotify_manager.DATASTORE.getPlaylistTracks(self.playlist.uri)
+            self.tracks = spotify_manager.ensure_playlist_tracks(self.playlist)
+            if self.tracks is None:
+                self.tracks = []
+            self.playlist.track_count = len(self.tracks) if self.tracks else self.playlist.track_count
         return self.tracks
 
     def total_size(self):
-        return self.playlist.track_count
+        tracks = self.get_tracks()
+        # Non-owned playlists: no track list — still allow playing the context
+        if not tracks:
+            return 1
+        return len(tracks)
 
     def page_at(self, index):
-        track = self.get_tracks()[index]
-        command = NowPlayingCommand(lambda: spotify_manager.play_from_playlist(self.playlist.uri, track.uri, None))
+        tracks = self.get_tracks()
+        if not tracks:
+            command = NowPlayingCommand(
+                lambda: spotify_manager.play_artist(self.playlist.uri)
+            )
+            return NowPlayingPage(self, "Play playlist", command)
+        track = tracks[index]
+        command = NowPlayingCommand(
+            lambda: spotify_manager.play_from_playlist(self.playlist.uri, track.uri, None)
+        )
         return NowPlayingPage(self, track.title, command)
 
 class SingleShowPage(MenuPage):
@@ -507,10 +549,11 @@ class RootPage(MenuPage):
         self.pages = [
             ArtistsPage(self),
             AlbumsPage(self),
-            NewReleasesPage(self),
+            RecentlyPlayedPage(self),
             PlaylistsPage(self),
             ShowsPage(self),
             SearchPage(self),
+            SyncLibraryPage(self),
             NowPlayingPage(self, "Now Playing", NowPlayingCommand())
         ]
         self.index = 0

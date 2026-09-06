@@ -1,0 +1,24 @@
+log_level: info
+device_name: iPod
+device_type: smartphone
+bitrate: 160
+
+zeroconf_enabled: true
+zeroconf_backend: avahi
+
+credentials:
+  type: zeroconf
+  zeroconf:
+    persist_credentials: true
+
+server:
+  enabled: true
+  address: 127.0.0.1
+  port: 3678
+
+audio_backend: __AUDIO_BACKEND__
+audio_device: default
+
+cache:
+  enabled: true
+  size_limit: 512MB
