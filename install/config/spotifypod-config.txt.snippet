@@ -1,17 +1,14 @@
 # --- sPot / Spotifypod display (mipi-dbi-spi ST7789V) ---
 # Do NOT enable vc4-kms-v3d when using the SPI panel as the only display.
-# Adjust DC/RESET/BACKLIGHT GPIO to match your Waveshare wiring.
-# Click wheel uses GPIO 23 (clock), 25 (data), 26 (haptic) — leave those alone
-# unless you also change clickwheel/click.c (not recommended).
+# Pins below were filled in by install/install.sh (DC_GPIO / RESET_GPIO / BL_GPIO).
+# Click wheel uses GPIO 23 (clock), 5 or 25 (data), 26 (haptic) — keep display pins clear of them.
 
 dtparam=spi=on
 
-# Default pins for Ricardo/Waveshare-style build (DC=24, RESET often on a free pin).
-# If DATA_PIN was remapped in click.c for SPI conflict, keep display pins clear of 23/25/26.
 dtoverlay=mipi-dbi-spi,spi0-0,speed=32000000
 dtparam=compatible="spotifypod,st7789v\0panel-mipi-dbi-spi"
 dtparam=width=320,height=240,width-mm=36,height-mm=28
-dtparam=reset-gpio=__RESET_GPIO__,dc-gpio=__DC_GPIO__,backlight-gpio=__BL_GPIO__
+dtparam=reset-gpio=__RESET_GPIO__,dc-gpio=__DC_GPIO____BL_PARAM__
 dtparam=write-only
 
 # Disable HDMI / composite noise when using SPI LCD only

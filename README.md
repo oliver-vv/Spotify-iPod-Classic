@@ -69,9 +69,12 @@ Useful overrides:
 # I2S / USB DAC instead of PipeWire Bluetooth (default)
 sudo AUDIO_BACKEND=alsa bash install/install.sh
 
-# Display GPIOs if your wiring differs (defaults: DC=24 RESET=27 BL=18)
-# Click wheel keeps GPIO 23 (clock), 25 (data), 26 (haptic) unless you rebuild click.c
-sudo DC_GPIO=24 RESET_GPIO=27 BL_GPIO=18 bash install/install.sh
+# Pins. Defaults match Ricardo's Waveshare build: display DC=24 RESET=25, backlight
+# hard-wired to 3.3V, click wheel DATA on GPIO 5 (clock 23, haptic 26).
+# If you wired it like the original Guy Dupont build instead (wheel data on 25, no SPI):
+sudo CLICK_DATA_PIN="" DC_GPIO=24 RESET_GPIO=27 bash install/install.sh
+# If your backlight IS on a GPIO:
+sudo BL_GPIO=18 bash install/install.sh
 ```
 
 Then edit credentials:
@@ -165,15 +168,19 @@ python3 spotifypod.py   # 320×240 window; arrow keys navigate
 
 ## Wiring reminder
 
-Click wheel (unchanged from upstream `click.c`):
+`clickwheel/click.c` in this repo is byte-identical to upstream (`DATA_PIN 25`). The installer compiles a temporary copy with `DATA_PIN` set from `CLICK_DATA_PIN` (default `5`, Ricardo's wiring) so the source file never changes.
 
-| Signal | BCM GPIO |
-|--------|----------|
-| Clock  | 23 |
-| Data   | 25 |
-| Haptic | 26 |
+| Signal | BCM GPIO (Ricardo build, default) | Physical pin |
+|--------|-----------------------------------|--------------|
+| Wheel clock  | 23 | 16 |
+| Wheel data   | 5  | 29 |
+| Haptic       | 26 | 37 |
+| Display DC   | 24 | 18 |
+| Display RST  | 25 | 22 |
+| Display BL   | 3.3V (no GPIO) | 1 / 17 |
+| SPI MOSI / SCLK / CE0 | 10 / 11 / 8 | 19 / 23 / 24 |
 
-Default display overlay uses **DC=24, RESET=27, BL=18** — change via `install.sh` env vars if your Waveshare wiring differs.
+The installer refuses to run if a display pin collides with a wheel pin or the SPI bus.
 
 ---
 

@@ -13,10 +13,17 @@ CONFIG_DIR="${CONFIG_DIR:-/etc/spotifypod}"
 SPOTIFYPOD_USER="${SPOTIFYPOD_USER:-spotifypod}"
 # Audio: pulseaudio (PipeWire BT default) or alsa (I2S/USB DAC)
 AUDIO_BACKEND="${AUDIO_BACKEND:-pulseaudio}"
-# Display GPIOs for mipi-dbi-spi (must not conflict with click.c: 23/25/26)
+# Display GPIOs for mipi-dbi-spi. Defaults follow Ricardo Sappia's Waveshare build
+# (DC=24, RESET=25, backlight hard-wired to 3.3V). Set BL_GPIO only if BL is on a GPIO.
 DC_GPIO="${DC_GPIO:-24}"
-RESET_GPIO="${RESET_GPIO:-27}"
-BL_GPIO="${BL_GPIO:-18}"
+RESET_GPIO="${RESET_GPIO:-25}"
+BL_GPIO="${BL_GPIO:-}"
+# Click wheel DATA pin. Upstream click.c says 25; Ricardo's build moves it to 5 because
+# GPIO 25 is the display reset. The repo file is never modified: the override is applied
+# to a temporary copy at compile time only. Set CLICK_DATA_PIN="" to use the file as-is.
+CLICK_DATA_PIN="${CLICK_DATA_PIN-5}"
+CLICK_CLOCK_PIN=23
+CLICK_HAPTIC_PIN=26
 GO_LIBRESPOT_VERSION="${GO_LIBRESPOT_VERSION:-latest}"
 HOSTNAME_VALUE="${HOSTNAME_VALUE:-ipod}"
 
@@ -24,6 +31,27 @@ if [[ "$(id -u)" -ne 0 ]]; then
   echo "Run as root: sudo bash $0" >&2
   exit 1
 fi
+
+# --- Pin sanity check: display pins must not collide with the click wheel ---
+EFFECTIVE_DATA_PIN="${CLICK_DATA_PIN:-25}"
+for p in "${DC_GPIO}" "${RESET_GPIO}" "${BL_GPIO}"; do
+  [[ -z "${p}" ]] && continue
+  for c in "${CLICK_CLOCK_PIN}" "${EFFECTIVE_DATA_PIN}" "${CLICK_HAPTIC_PIN}"; do
+    if [[ "${p}" == "${c}" ]]; then
+      echo "ERROR: display GPIO ${p} collides with a click wheel pin (clock=${CLICK_CLOCK_PIN}, data=${EFFECTIVE_DATA_PIN}, haptic=${CLICK_HAPTIC_PIN})." >&2
+      echo "       Adjust DC_GPIO / RESET_GPIO / BL_GPIO / CLICK_DATA_PIN to match your wiring." >&2
+      exit 1
+    fi
+  done
+done
+for p in "${DC_GPIO}" "${RESET_GPIO}" "${BL_GPIO}"; do
+  [[ -z "${p}" ]] && continue
+  case "${p}" in 8|9|10|11) echo "ERROR: GPIO ${p} is the SPI0 bus itself (CE0/MISO/MOSI/SCLK)." >&2; exit 1 ;; esac
+done
+
+echo "==> Pin map"
+echo "    click wheel : clock=${CLICK_CLOCK_PIN} data=${EFFECTIVE_DATA_PIN} haptic=${CLICK_HAPTIC_PIN}"
+echo "    display     : dc=${DC_GPIO} reset=${RESET_GPIO} backlight=${BL_GPIO:-<hard-wired>} spi0 (mosi=10 sclk=11 ce0=8)"
 
 echo "==> Installing packages"
 export DEBIAN_FRONTEND=noninteractive
@@ -75,9 +103,17 @@ setcap 'cap_net_bind_service=+ep' "${INSTALL_ROOT}/venv/bin/python3" 2>/dev/null
   echo "WARN: setcap failed; portal may need to run as root or use authbind for port 80"
 
 echo "==> Compile click wheel binary"
-gcc -Wall -pthread -O2 -o "${INSTALL_ROOT}/bin/click" \
-  "${REPO_ROOT}/clickwheel/click.c" -lpigpio -lrt
+CLICK_SRC="${REPO_ROOT}/clickwheel/click.c"
+if [[ -n "${CLICK_DATA_PIN}" ]]; then
+  # Build from a temp copy so the repo's click.c stays untouched.
+  CLICK_TMP="$(mktemp -d)"
+  sed "s/^#define DATA_PIN .*/#define DATA_PIN ${CLICK_DATA_PIN}/" "${CLICK_SRC}" > "${CLICK_TMP}/click.c"
+  CLICK_SRC="${CLICK_TMP}/click.c"
+  echo "    (compiling with DATA_PIN=${CLICK_DATA_PIN}; repo file unchanged)"
+fi
+gcc -Wall -pthread -O2 -o "${INSTALL_ROOT}/bin/click" "${CLICK_SRC}" -lpigpio -lrt
 chmod 755 "${INSTALL_ROOT}/bin/click"
+[[ -n "${CLICK_TMP:-}" ]] && rm -rf "${CLICK_TMP}"
 
 echo "==> Download go-librespot (arm64)"
 ARCH="$(uname -m)"
@@ -158,9 +194,14 @@ for candidate in /boot/firmware/config.txt /boot/config.txt; do
 done
 if [[ -n "${BOOTCFG}" ]]; then
   SNIPPET="$(mktemp)"
+  if [[ -n "${BL_GPIO}" ]]; then
+    BL_PARAM=",backlight-gpio=${BL_GPIO}"
+  else
+    BL_PARAM=""
+  fi
   sed -e "s/__DC_GPIO__/${DC_GPIO}/g" \
       -e "s/__RESET_GPIO__/${RESET_GPIO}/g" \
-      -e "s/__BL_GPIO__/${BL_GPIO}/g" \
+      -e "s/__BL_PARAM__/${BL_PARAM}/g" \
       "${SCRIPT_DIR}/config/spotifypod-config.txt.snippet" > "${SNIPPET}"
   if ! grep -q 'sPot / Spotifypod display' "${BOOTCFG}"; then
     echo "" >> "${BOOTCFG}"
@@ -229,7 +270,7 @@ echo ""
 echo "Install complete."
 echo "  1. Edit ${CONFIG_DIR}/config.env (Spotify Client ID + redirect URI)"
 echo "  2. Enable GitHub Pages for docs/spotify-callback.html and register that HTTPS URI"
-echo "  3. Confirm display GPIOs (DC=${DC_GPIO} RESET=${RESET_GPIO} BL=${BL_GPIO})"
+echo "  3. Pins used: display DC=${DC_GPIO} RESET=${RESET_GPIO} BL=${BL_GPIO:-hard-wired}; wheel data=${EFFECTIVE_DATA_PIN}"
 echo "  4. Reboot. First boot: join iPod hotspot QR / comitup, then Spotify Connect to 'iPod',"
 echo "     then open http://ipod.local to link the Web API library."
 echo "  AUDIO_BACKEND=${AUDIO_BACKEND}"
