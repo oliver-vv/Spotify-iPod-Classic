@@ -27,6 +27,8 @@ from typing import Optional
 os.environ.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
 
 MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+# bluetoothctl scan <transport>: "bredr" (classic, what speakers use), "le", or "on" (both)
+SCAN_TRANSPORT = os.environ.get("BT_SCAN_TRANSPORT", "bredr")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _DEVICE_LINE_RE = re.compile(r"Device\s+(([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s*(.*)$")
 
@@ -190,8 +192,10 @@ class _Scanner:
                 return False  # already scanning
             power_on()
             try:
+                # "bredr": classic Bluetooth only. Speakers are BR/EDR; scanning "on"
+                # (BR/EDR + LE) floods the list with nameless phones/TVs/gadgets.
                 self._proc = subprocess.Popen(
-                    ["bluetoothctl", "--timeout", str(int(seconds)), "scan", "on"],
+                    ["bluetoothctl", "--timeout", str(int(seconds)), "scan", SCAN_TRANSPORT],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -263,7 +267,7 @@ def is_scanning() -> bool:
 def scan(seconds: int = 8) -> None:
     """Blocking discovery (used before pairing a device bluez no longer knows)."""
     power_on()
-    _run(["bluetoothctl", "--timeout", str(int(seconds)), "scan", "on"], timeout=seconds + 5)
+    _run(["bluetoothctl", "--timeout", str(int(seconds)), "scan", SCAN_TRANSPORT], timeout=seconds + 5)
 
 
 # --------------------------------------------------------------------------- actions
