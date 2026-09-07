@@ -60,12 +60,33 @@ apt-get update
 apt-get install -y \
   python3 python3-venv python3-pip python3-tk python3-pil.imagetk \
   xserver-xorg-core xserver-xorg-video-fbdev xinit x11-xserver-utils \
-  libpigpio-dev pigpio pigpio-tools \
   network-manager avahi-daemon \
   curl ca-certificates unzip fonts-dejavu-core \
   pipewire pipewire-audio pipewire-alsa wireplumber \
   libspa-0.2-bluetooth bluez \
   gcc make
+
+# pigpio (used by click.c) was dropped from the Raspberry Pi OS repos in Trixie.
+# Use the apt package if it exists (Bookworm), otherwise build v79 from source.
+PIGPIO_VERSION="${PIGPIO_VERSION:-79}"
+if ! apt-get install -y libpigpio-dev 2>/dev/null; then
+  if [[ -f /usr/local/include/pigpio.h && -f /usr/local/lib/libpigpio.so.1 ]]; then
+    echo "==> pigpio already installed under /usr/local"
+  else
+    echo "==> Building pigpio v${PIGPIO_VERSION} from source (not packaged on this OS)"
+    PIGPIO_TMP="$(mktemp -d)"
+    curl -fsSL "https://github.com/joan2937/pigpio/archive/refs/tags/v${PIGPIO_VERSION}.tar.gz" \
+      | tar -xz -C "${PIGPIO_TMP}"
+    make -C "${PIGPIO_TMP}/pigpio-${PIGPIO_VERSION}" -j"$(nproc)" libpigpio.so
+    # Install only the C library + header. `make install` also runs
+    # `python3 setup.py install`, which fails on Trixie (PEP 668).
+    install -m 644 "${PIGPIO_TMP}/pigpio-${PIGPIO_VERSION}/pigpio.h" /usr/local/include/
+    install -m 755 "${PIGPIO_TMP}/pigpio-${PIGPIO_VERSION}/libpigpio.so.1" /usr/local/lib/
+    ln -sf /usr/local/lib/libpigpio.so.1 /usr/local/lib/libpigpio.so
+    ldconfig
+    rm -rf "${PIGPIO_TMP}"
+  fi
+fi
 
 # Comitup may need its own repo on Bookworm; try apt first.
 if ! apt-get install -y comitup 2>/dev/null; then
@@ -112,7 +133,8 @@ if [[ -n "${CLICK_DATA_PIN}" ]]; then
   CLICK_SRC="${CLICK_TMP}/click.c"
   echo "    (compiling with DATA_PIN=${CLICK_DATA_PIN}; repo file unchanged)"
 fi
-gcc -Wall -pthread -O2 -o "${INSTALL_ROOT}/bin/click" "${CLICK_SRC}" -lpigpio -lrt
+gcc -Wall -pthread -O2 -I/usr/local/include -L/usr/local/lib \
+  -o "${INSTALL_ROOT}/bin/click" "${CLICK_SRC}" -lpigpio -lrt
 chmod 755 "${INSTALL_ROOT}/bin/click"
 [[ -n "${CLICK_TMP:-}" ]] && rm -rf "${CLICK_TMP}"
 
@@ -253,19 +275,22 @@ install -m 644 "${SCRIPT_DIR}/systemd/go-librespot.service" /etc/systemd/system/
 install -m 644 "${SCRIPT_DIR}/systemd/spotifypod.service" /etc/systemd/system/spotifypod.service
 install -m 644 "${SCRIPT_DIR}/systemd/spotifypod-portal.service" /etc/systemd/system/spotifypod-portal.service
 systemctl daemon-reload
-systemctl enable pigpiod click.service go-librespot.service spotifypod.service spotifypod-portal.service
+# Note: no pigpiod. click.c links libpigpio directly and owns the GPIO hardware
+# itself; a running daemon would fight it for the DMA/PCM peripherals.
+systemctl disable --now pigpiod 2>/dev/null || true
+systemctl enable click.service go-librespot.service spotifypod.service spotifypod-portal.service
 systemctl enable NetworkManager || true
 systemctl enable comitup 2>/dev/null || true
 
 # Autologin on tty1 so xinit can claim VT1 without getty conflict
-mkdir -p /etc/systemd/system/carlos.r@example.net.d
-cat > /etc/systemd/system/carlos.r@example.net.d/autologin.conf <<EOF
+mkdir -p /etc/systemd/system/getty@tty1.service.d
+cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf <<EOF
 [Service]
 ExecStart=
 ExecStart=-/sbin/agetty --autologin ${SPOTIFYPOD_USER} --noclear %I \$TERM
 EOF
 # Prefer system spotifypod service over interactive login starting X
-systemctl disable carlos.r@example.net 2>/dev/null || true
+systemctl disable getty@tty1.service 2>/dev/null || true
 
 echo ""
 echo "Install complete."

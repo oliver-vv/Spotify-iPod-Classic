@@ -1,7 +1,8 @@
 [Unit]
-Description=sPot click wheel reader (pigpio UDP :9090)
-After=network.target pigpiod.service
-Wants=pigpiod.service
+Description=sPot click wheel reader (libpigpio, UDP :9090)
+After=network.target
+# Must NOT run alongside pigpiod: click links libpigpio directly.
+Conflicts=pigpiod.service
 
 [Service]
 Type=simple

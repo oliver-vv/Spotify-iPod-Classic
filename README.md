@@ -109,7 +109,7 @@ The iPod screen walks you through setup with QR codes:
 
 Services (systemd):
 
-- `click.service` — wheel reader (root / pigpio)  
+- `click.service` — wheel reader (root / libpigpio; built from source on Trixie, where the apt package no longer exists)  
 - `go-librespot.service` — audio + Connect  
 - `spotifypod.service` — tkinter UI on X  
 - `spotifypod-portal.service` — setup web UI  
