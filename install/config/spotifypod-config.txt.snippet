@@ -1,12 +1,12 @@
 # --- sPot / Spotifypod display (mipi-dbi-spi ST7789V) ---
-# Do NOT enable vc4-kms-v3d when using the SPI panel as the only display.
+# vc4-kms-v3d is disabled by install.sh when using the SPI panel as the only display.
 # Pins below were filled in by install/install.sh (DC_GPIO / RESET_GPIO / BL_GPIO).
 # Click wheel uses GPIO 23 (clock), 5 or 25 (data), 26 (haptic) — keep display pins clear of them.
+# Init sequence comes from /lib/firmware/panel.bin (built from install/config/panel.txt).
 
 dtparam=spi=on
 
 dtoverlay=mipi-dbi-spi,spi0-0,speed=32000000
-dtparam=compatible="spotifypod,st7789v\0panel-mipi-dbi-spi"
 dtparam=width=320,height=240,width-mm=36,height-mm=28
 dtparam=reset-gpio=__RESET_GPIO__,dc-gpio=__DC_GPIO____BL_PARAM__
 dtparam=write-only

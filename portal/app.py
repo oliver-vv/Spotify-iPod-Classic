@@ -72,11 +72,10 @@ def spotify_start():
             error="Set SPOTIPY_CLIENT_ID in /etc/spotifypod/config.env",
             **_status_ctx(),
         )
-    auth = spotify_manager.get_auth_manager()
     # state carries the HTTP callback on this device so the HTTPS relay can bounce back
     local_cb = _request_base().rstrip("/") + "/spotify/callback"
-    # Spotipy PKCE get_authorize_url — pass state
-    url = auth.get_authorize_url(state=local_cb)
+    # Generates the PKCE verifier and persists it for the callback request
+    url = spotify_manager.begin_pkce_login(state=local_cb)
     return redirect(url)
 
 
@@ -92,9 +91,8 @@ def spotify_callback():
             error="Missing code. Use Paste URL if the redirect failed.",
             **_status_ctx(),
         )
-    auth = spotify_manager.get_auth_manager()
     try:
-        auth.get_access_token(code=code, check_cache=False)
+        spotify_manager.finish_pkce_login(code)
     except Exception as exc:
         return render_template("index.html", error=str(exc), **_status_ctx())
     spotify_manager.init_spotify(force=True)
@@ -119,8 +117,7 @@ def spotify_paste():
             return render_template(
                 "index.html", error="No code= found in that URL", **_status_ctx()
             )
-        auth = spotify_manager.get_auth_manager()
-        auth.get_access_token(code=code, check_cache=False)
+        spotify_manager.finish_pkce_login(code)
         spotify_manager.init_spotify(force=True)
         spotify_manager.run_async(lambda: spotify_manager.refresh_data(full=False))
         return redirect(url_for("index"))

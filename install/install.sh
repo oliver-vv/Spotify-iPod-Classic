@@ -59,7 +59,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y \
   python3 python3-venv python3-pip python3-tk python3-pil.imagetk \
-  xserver-xorg-core xserver-xorg-video-fbdev xinit x11-xserver-utils \
+  xserver-xorg-core xserver-xorg-video-fbdev xserver-xorg-legacy xinit x11-xserver-utils \
   network-manager avahi-daemon \
   curl ca-certificates unzip fonts-dejavu-core \
   pipewire pipewire-audio pipewire-alsa wireplumber \
@@ -114,6 +114,7 @@ rsync -a --delete \
   "${REPO_ROOT}/portal/" "${INSTALL_ROOT}/portal/"
 
 install -m 755 "${SCRIPT_DIR}/config/xinitrc" "${INSTALL_ROOT}/xinitrc"
+install -m 755 "${SCRIPT_DIR}/bin/select-lcd-fb.sh" "${INSTALL_ROOT}/bin/select-lcd-fb.sh"
 chown -R "${SPOTIFYPOD_USER}:${SPOTIFYPOD_USER}" "${INSTALL_ROOT}/frontend" "${INSTALL_ROOT}/portal"
 
 echo "==> Python venv"
@@ -202,13 +203,16 @@ if command -v mipi-dbi-cmd >/dev/null 2>&1; then
 else
   python3 "${SCRIPT_DIR}/tools/mipi_dbi_cmd.py" /lib/firmware/panel.bin "${PANEL_TXT}"
 fi
-# Overlay with compatible=spotifypod,st7789v looks for spotifypod,st7789v.bin
-if [[ -f /lib/firmware/panel.bin ]]; then
-  cp /lib/firmware/panel.bin "/lib/firmware/spotifypod,st7789v.bin" || true
-fi
+rm -f "/lib/firmware/spotifypod,st7789v.bin"   # leftover from earlier installer versions
 
 echo "==> Xorg fbdev config"
 install -m 644 "${SCRIPT_DIR}/config/99-fbdev.conf" /etc/X11/xorg.conf.d/99-fbdev.conf
+# Let Xorg run with root rights from the systemd service (kiosk; no display manager).
+# Avoids rootless-X VT/tty permission failures on a bare fbdev setup.
+cat > /etc/X11/Xwrapper.config <<EOF
+allowed_users=anybody
+needs_root_rights=yes
+EOF
 
 echo "==> Boot config snippet"
 BOOTCFG=""
@@ -226,10 +230,10 @@ if [[ -n "${BOOTCFG}" ]]; then
       -e "s/__RESET_GPIO__/${RESET_GPIO}/g" \
       -e "s/__BL_PARAM__/${BL_PARAM}/g" \
       "${SCRIPT_DIR}/config/spotifypod-config.txt.snippet" > "${SNIPPET}"
-  if ! grep -q 'sPot / Spotifypod display' "${BOOTCFG}"; then
-    echo "" >> "${BOOTCFG}"
-    cat "${SNIPPET}" >> "${BOOTCFG}"
-  fi
+  # Replace any block written by an earlier run (marker line .. enable_tvout=0), then append.
+  sed -i '/^# --- sPot \/ Spotifypod display/,/^enable_tvout=0/d' "${BOOTCFG}"
+  echo "" >> "${BOOTCFG}"
+  cat "${SNIPPET}" >> "${BOOTCFG}"
   # Comment out vc4-kms-v3d if present (SPI-only display)
   sed -i 's/^dtoverlay=vc4-kms-v3d/# dtoverlay=vc4-kms-v3d  # disabled for SPI LCD/' "${BOOTCFG}" || true
   rm -f "${SNIPPET}"
@@ -257,6 +261,12 @@ fi
 
 echo "==> Hostname / Avahi"
 hostnamectl set-hostname "${HOSTNAME_VALUE}" 2>/dev/null || echo "${HOSTNAME_VALUE}" > /etc/hostname
+# hostnamectl does not touch /etc/hosts; without this sudo warns "unable to resolve host"
+if grep -qE '^127\.0\.1\.1\s' /etc/hosts; then
+  sed -i -E "s/^(127\.0\.1\.1\s+).*/\1${HOSTNAME_VALUE}/" /etc/hosts
+else
+  echo "127.0.1.1	${HOSTNAME_VALUE}" >> /etc/hosts
+fi
 if [[ -f /etc/avahi/avahi-daemon.conf ]]; then
   systemctl enable avahi-daemon || true
 fi

@@ -149,6 +149,9 @@ def has_token() -> bool:
     return os.path.isfile(TOKEN_PATH) and os.path.getsize(TOKEN_PATH) > 10
 
 
+PKCE_VERIFIER_PATH = os.path.join(os.path.dirname(TOKEN_PATH), "pkce_verifier")
+
+
 def get_auth_manager() -> SpotifyPKCE:
     client_id = os.environ.get("SPOTIPY_CLIENT_ID", "")
     redirect_uri = os.environ.get(
@@ -162,6 +165,45 @@ def get_auth_manager() -> SpotifyPKCE:
         cache_path=TOKEN_PATH,
         open_browser=False,
     )
+
+
+def begin_pkce_login(state: Optional[str] = None) -> str:
+    """Return the Spotify authorize URL and persist the PKCE verifier.
+
+    The authorize and callback HTTP requests are handled by different
+    SpotifyPKCE instances (and possibly different processes), so the
+    code_verifier generated here must survive until the code exchange.
+    """
+    auth = get_auth_manager()
+    url = auth.get_authorize_url(state=state)
+    os.makedirs(os.path.dirname(PKCE_VERIFIER_PATH), exist_ok=True)
+    fd = os.open(PKCE_VERIFIER_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(auth.code_verifier)
+    return url
+
+
+def finish_pkce_login(code: str) -> None:
+    """Exchange the authorization code using the verifier saved by begin_pkce_login."""
+    auth = get_auth_manager()
+    try:
+        with open(PKCE_VERIFIER_PATH) as fh:
+            verifier = fh.read().strip()
+    except OSError:
+        verifier = ""
+    if not verifier:
+        raise RuntimeError(
+            "No pending login: start again with 'Authorize with Spotify' and complete it in one go."
+        )
+    # Both must be set, otherwise spotipy silently generates a fresh pair
+    # (-> "code_verifier was incorrect").
+    auth.code_verifier = verifier
+    auth.code_challenge = auth._get_code_challenge()
+    auth.get_access_token(code=code, check_cache=False)
+    try:
+        os.remove(PKCE_VERIFIER_PATH)
+    except OSError:
+        pass
 
 
 def init_spotify(force: bool = False) -> Optional[spotipy.Spotify]:
