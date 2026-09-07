@@ -14,10 +14,11 @@ SPOTIFYPOD_USER="${SPOTIFYPOD_USER:-spotifypod}"
 # Audio: pulseaudio (PipeWire BT default) or alsa (I2S/USB DAC)
 AUDIO_BACKEND="${AUDIO_BACKEND:-pulseaudio}"
 # Display GPIOs for mipi-dbi-spi. Defaults follow Ricardo Sappia's Waveshare build
-# (DC=24, RESET=25, backlight hard-wired to 3.3V). Set BL_GPIO only if BL is on a GPIO.
+# (DC=24 / pin 18, RESET=25 / pin 22, backlight GPIO 18 / pin 12).
+# Set BL_GPIO="" if your backlight is hard-wired to 3.3V instead.
 DC_GPIO="${DC_GPIO:-24}"
 RESET_GPIO="${RESET_GPIO:-25}"
-BL_GPIO="${BL_GPIO:-}"
+BL_GPIO="${BL_GPIO-18}"
 # Click wheel DATA pin. Upstream click.c says 25; Ricardo's build moves it to 5 because
 # GPIO 25 is the display reset. The repo file is never modified: the override is applied
 # to a temporary copy at compile time only. Set CLICK_DATA_PIN="" to use the file as-is.

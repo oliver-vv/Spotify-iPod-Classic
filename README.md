@@ -69,12 +69,10 @@ Useful overrides:
 # I2S / USB DAC instead of PipeWire Bluetooth (default)
 sudo AUDIO_BACKEND=alsa bash install/install.sh
 
-# Pins. Defaults match Ricardo's Waveshare build: display DC=24 RESET=25, backlight
-# hard-wired to 3.3V, click wheel DATA on GPIO 5 (clock 23, haptic 26).
-# If you wired it like the original Guy Dupont build instead (wheel data on 25, no SPI):
-sudo CLICK_DATA_PIN="" DC_GPIO=24 RESET_GPIO=27 bash install/install.sh
-# If your backlight IS on a GPIO:
-sudo BL_GPIO=18 bash install/install.sh
+# Pins. Defaults match Ricardo's Waveshare build: display DC=24 RESET=25 BL=18,
+# click wheel DATA on GPIO 5 (clock 23, haptic 26). Override only what differs, e.g.:
+sudo BL_GPIO="" bash install/install.sh            # backlight hard-wired to 3.3V
+sudo CLICK_DATA_PIN="" RESET_GPIO=27 bash install/install.sh   # original Dupont wiring (wheel data on 25)
 ```
 
 Then edit credentials:
@@ -177,7 +175,8 @@ python3 spotifypod.py   # 320×240 window; arrow keys navigate
 | Haptic       | 26 | 37 |
 | Display DC   | 24 | 18 |
 | Display RST  | 25 | 22 |
-| Display BL   | 3.3V (no GPIO) | 1 / 17 |
+| Display BL   | 18 | 12 |
+| Display VCC  | 3.3V | 17 |
 | SPI MOSI / SCLK / CE0 | 10 / 11 / 8 | 19 / 23 / 24 |
 
 The installer refuses to run if a display pin collides with a wheel pin or the SPI bus.
