@@ -29,6 +29,7 @@ if os.path.isfile(_ENV):
 
 import bt_manager  # noqa: E402
 import player  # noqa: E402
+import power  # noqa: E402
 import setup_state  # noqa: E402
 import spotify_manager  # noqa: E402
 
@@ -198,6 +199,29 @@ def audio_default():
     if not sink_id.isdigit() or not bt_manager.set_default_sink(sink_id):
         return {"ok": False, "message": "Could not set default audio output"}, 502
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- Power
+# Clean shutdown via logind (polkit rule installed by install.sh). The reply may
+# never reach the browser if the system goes down quickly; the page treats a
+# failed fetch as "probably already shutting down".
+
+
+def _power(action) -> tuple[dict, int]:
+    ok, err = action()
+    if not ok:
+        return {"ok": False, "message": err or "Command failed"}, 502
+    return {"ok": True}, 200
+
+
+@app.post("/power/shutdown")
+def power_shutdown():
+    return _power(power.shutdown)
+
+
+@app.post("/power/reboot")
+def power_reboot():
+    return _power(power.reboot)
 
 
 @app.get("/api/status")

@@ -60,7 +60,7 @@ apt-get update
 apt-get install -y \
   python3 python3-venv python3-pip python3-tk python3-pil.imagetk \
   xserver-xorg-core xserver-xorg-video-fbdev xserver-xorg-legacy xinit x11-xserver-utils \
-  network-manager avahi-daemon \
+  network-manager avahi-daemon polkitd \
   curl ca-certificates unzip fonts-dejavu-core \
   pipewire pipewire-audio pipewire-alsa pipewire-pulse wireplumber dbus-user-session \
   libspa-0.2-bluetooth bluez \
@@ -296,6 +296,26 @@ cat > /etc/NetworkManager/conf.d/spotifypod-wifi-powersave.conf <<EOF
 [connection]
 wifi.powersave = 2
 EOF
+
+echo "==> Power: allow ${SPOTIFYPOD_USER} to shut down / reboot via logind (polkit)"
+# The UI (Settings menu) and the portal (Power card) run `systemctl poweroff|reboot`
+# as the unprivileged spotifypod user. systemctl asks logind, logind asks polkit.
+# JS rules need polkit >= 0.106 (Bookworm ships 122, Trixie 126). polkitd watches
+# rules.d, no restart needed.
+mkdir -p /etc/polkit-1/rules.d
+sed "s/__USER__/${SPOTIFYPOD_USER}/g" "${SCRIPT_DIR}/config/50-spotifypod-power.rules" \
+  > /etc/polkit-1/rules.d/50-spotifypod-power.rules
+chmod 644 /etc/polkit-1/rules.d/50-spotifypod-power.rules
+
+echo "==> journald: keep logs in RAM (fewer SD card writes, safer against power cuts)"
+# `journalctl -b` still works for the current boot; logs are not kept across reboots.
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/spotifypod.conf <<EOF
+[Journal]
+Storage=volatile
+RuntimeMaxUse=16M
+EOF
+systemctl restart systemd-journald 2>/dev/null || true
 
 echo "==> Fonts (ChicagoFLF if present in repo)"
 mkdir -p /usr/local/share/fonts/spotifypod

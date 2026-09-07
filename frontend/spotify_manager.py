@@ -623,7 +623,15 @@ def _status_to_now_playing(st: dict) -> Optional[dict]:
         or st.get("track_duration")
         or 0
     )
-    progress = st.get("position") or st.get("progress") or st.get("track_position") or 0
+    # go-librespot reports the playback position inside `track` (see api-spec.yml);
+    # the top-level fallbacks cover older/other status shapes.
+    progress = (
+        track.get("position")
+        or st.get("position")
+        or st.get("progress")
+        or st.get("track_position")
+        or 0
+    )
     paused = st.get("paused")
     if paused is None:
         is_playing = bool(st.get("playing") or st.get("is_playing"))
@@ -642,6 +650,11 @@ def _status_to_now_playing(st: dict) -> Optional[dict]:
         "context_name": artist,
         "track_index": -1,
         "timestamp": time.time(),
+        # Player volume (0..volume_steps); None if this status shape has none
+        "volume": st.get("volume") if isinstance(st.get("volume"), int) else None,
+        "volume_steps": st.get("volume_steps") or DEFAULT_VOLUME_STEPS,
+        # Until when the UI shows the volume bar instead of track progress
+        "volume_until": 0.0,
     }
 
     if context_uri and "playlist" in context_uri:
@@ -709,7 +722,87 @@ def search(query):
 
 
 def refresh_now_playing():
-    DATASTORE.now_playing = get_now_playing()
+    now_playing = get_now_playing()
+    if now_playing is not None:
+        with _volume_lock:
+            # While the user is turning the wheel, show the value they dialled in,
+            # not whatever the player reported before our POST landed.
+            if _volume_target is not None and time.time() < _volume_until:
+                now_playing["volume"] = _volume_target
+                now_playing["volume_steps"] = _volume_max
+                now_playing["volume_until"] = _volume_until
+    DATASTORE.now_playing = now_playing
+
+
+# ---------------------------------------------------------------- volume (click wheel)
+# The wheel emits an event every other position (~48 per revolution). Each tick
+# moves a local target immediately (so the UI is responsive) and a single
+# background sender pushes the latest absolute value to go-librespot once the
+# wheel has been still for a moment, instead of one HTTP call per notch.
+DEFAULT_VOLUME_STEPS = 100
+VOLUME_OVERLAY_SECONDS = 2.0
+_VOLUME_SEND_DELAY = 0.06
+
+_volume_lock = threading.Lock()
+_volume_target: Optional[int] = None
+_volume_max = DEFAULT_VOLUME_STEPS
+_volume_until = 0.0
+_volume_send_at = 0.0
+_volume_sender: Optional[threading.Thread] = None
+
+
+def _current_volume() -> tuple[int, int]:
+    """(value, max) as last reported by the player."""
+    now_playing = DATASTORE.now_playing or {}
+    if now_playing.get("volume") is not None:
+        return int(now_playing["volume"]), int(now_playing.get("volume_steps") or DEFAULT_VOLUME_STEPS)
+    vol = player.get_volume()
+    if vol and vol.get("max"):
+        return int(vol.get("value") or 0), int(vol["max"])
+    return DEFAULT_VOLUME_STEPS // 2, DEFAULT_VOLUME_STEPS
+
+
+def _volume_sender_loop():
+    global _volume_sender
+    while True:
+        with _volume_lock:
+            wait = _volume_send_at - time.time()
+        if wait > 0:
+            time.sleep(wait)
+            continue
+        with _volume_lock:
+            target = _volume_target
+            send_at = _volume_send_at
+        try:
+            player.volume(target)
+        except player.PlayerError as exc:
+            print("volume:", exc)
+        with _volume_lock:
+            if _volume_send_at == send_at:
+                # nothing new was dialled while we were sending
+                _volume_sender = None
+                return
+
+
+def adjust_volume(direction: int) -> None:
+    """Nudge the volume by one wheel notch; direction is +1 (clockwise) or -1."""
+    global _volume_target, _volume_max, _volume_until, _volume_send_at, _volume_sender
+    now = time.time()
+    with _volume_lock:
+        if _volume_target is None or now >= _volume_until:
+            _volume_target, _volume_max = _current_volume()
+        step = max(1, _volume_max // 50)   # one full turn of the wheel ~ full range
+        _volume_target = max(0, min(_volume_max, _volume_target + direction * step))
+        _volume_until = now + VOLUME_OVERLAY_SECONDS
+        _volume_send_at = now + _VOLUME_SEND_DELAY
+        now_playing = DATASTORE.now_playing
+        if now_playing is not None:
+            now_playing["volume"] = _volume_target
+            now_playing["volume_steps"] = _volume_max
+            now_playing["volume_until"] = _volume_until
+        if _volume_sender is None or not _volume_sender.is_alive():
+            _volume_sender = threading.Thread(target=_volume_sender_loop, daemon=True)
+            _volume_sender.start()
 
 
 def play_next():

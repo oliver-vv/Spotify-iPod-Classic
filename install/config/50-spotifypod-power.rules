@@ -1,0 +1,18 @@
+// Let the sPot UI and setup portal (user __USER__) power off / reboot the iPod
+// through logind without a password. Installed by install/install.sh to
+// /etc/polkit-1/rules.d/50-spotifypod-power.rules (__USER__ is substituted).
+polkit.addRule(function (action, subject) {
+    if (subject.user !== "__USER__") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    switch (action.id) {
+        case "org.freedesktop.login1.power-off":
+        case "org.freedesktop.login1.power-off-multiple-sessions":
+        case "org.freedesktop.login1.power-off-ignore-inhibit":
+        case "org.freedesktop.login1.reboot":
+        case "org.freedesktop.login1.reboot-multiple-sessions":
+        case "org.freedesktop.login1.reboot-ignore-inhibit":
+            return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

@@ -110,7 +110,17 @@ def stop() -> None:
     _request("POST", "/player/stop")
 
 
-def volume(value: Optional[int] = None) -> Any:
-    if value is None:
-        return status()
-    return _request("POST", "/player/volume", {"value": value})
+def get_volume() -> Optional[dict]:
+    """{"value": current, "max": steps} or None if unreachable."""
+    try:
+        return _request("GET", "/player/volume")
+    except PlayerError:
+        return None
+
+
+def volume(value: int, relative: bool = False) -> None:
+    """Set the player volume (0..max), or nudge it by `value` when relative."""
+    body: dict[str, Any] = {"volume": int(value)}
+    if relative:
+        body["relative"] = True
+    _request("POST", "/player/volume", body)

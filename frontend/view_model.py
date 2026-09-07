@@ -1,3 +1,4 @@
+import power
 import spotify_manager
 import re as re
 from functools import lru_cache 
@@ -189,11 +190,15 @@ class NowPlayingPage():
     def nav_play(self):
         spotify_manager.run_async(lambda: self.toggle_play()) 
 
+    # iPod Classic: turning the wheel on Now Playing changes the volume
+    # (clockwise = louder). Fast path: no network call, the sender coalesces.
     def nav_up(self):
-        pass
+        spotify_manager.adjust_volume(+1)
+        self.live_render.refresh()
 
     def nav_down(self):
-        pass
+        spotify_manager.adjust_volume(-1)
+        self.live_render.refresh()
 
     def nav_select(self):
         return self
@@ -272,7 +277,10 @@ class MenuPage():
                 else:
                     line_type = LINE_TITLE if page.is_title else \
                         LINE_HIGHLIGHT if i == self.index else LINE_NORMAL
-                    lines.append(LineItem(page.header, line_type, page.has_sub_page))
+                    # A page may show a different label in its parent's list than
+                    # as its own header (e.g. "Shut Down" -> "Shut down?")
+                    title = getattr(page, "menu_title", None) or page.header
+                    lines.append(LineItem(title, line_type, page.has_sub_page))
             else:
                 lines.append(EMPTY_LINE_ITEM)
         return MenuRendering(lines=lines, header=self.header, page_start=self.index, total_count=total_size)
@@ -543,6 +551,66 @@ class PlaceHolderPage(MenuPage):
     def __init__(self, header, previous_page, has_sub_page=True, is_title = False):
         super().__init__(header, previous_page, has_sub_page, is_title)
 
+class MessagePage(MenuPage):
+    """A single non-interactive line under a header (e.g. "Shutting down...")."""
+    def __init__(self, header, message, previous_page):
+        super().__init__(header, previous_page, has_sub_page=False)
+        self.message = message
+
+    def render(self):
+        lines = [LineItem(self.message, LINE_TITLE, False)]
+        for _ in range(MENU_PAGE_SIZE - 1):
+            lines.append(EMPTY_LINE_ITEM)
+        return MenuRendering(lines=lines, header=self.header, page_start=0, total_count=1)
+
+class ConfirmPage(MenuPage):
+    """Two-line "No / Yes" menu; "Yes" runs `action` in the background and shows `busy_text`."""
+    def __init__(self, menu_title, question, previous_page, action, busy_text):
+        super().__init__(question, previous_page, has_sub_page=True)
+        self.menu_title = menu_title
+        self.action = action
+        self.busy_text = busy_text
+        self.items = [
+            PlaceHolderPage("No", self, has_sub_page=False),
+            PlaceHolderPage("Yes", self, has_sub_page=False),
+        ]
+
+    def total_size(self):
+        return len(self.items)
+
+    def page_at(self, index):
+        return self.items[index]
+
+    def nav_select(self):
+        if self.index == 1:
+            spotify_manager.run_async(self._run)
+            return MessagePage(self.menu_title, self.busy_text, self)
+        self.index = 0
+        return self.previous_page
+
+    def _run(self):
+        ok, err = self.action()
+        if not ok:
+            print(f"{self.menu_title}: {err}")
+
+    def nav_back(self):
+        self.index = 0
+        return self.previous_page
+
+class SettingsPage(MenuPage):
+    def __init__(self, previous_page):
+        super().__init__("Settings", previous_page, has_sub_page=True)
+        self.items = [
+            ConfirmPage("Shut Down", "Shut down?", self, power.shutdown, "Shutting down..."),
+            ConfirmPage("Reboot", "Reboot?", self, power.reboot, "Rebooting..."),
+        ]
+
+    def total_size(self):
+        return len(self.items)
+
+    def page_at(self, index):
+        return self.items[index]
+
 class RootPage(MenuPage):
     def __init__(self, previous_page):
         super().__init__("sPot", previous_page, has_sub_page=True)
@@ -554,6 +622,7 @@ class RootPage(MenuPage):
             ShowsPage(self),
             SearchPage(self),
             SyncLibraryPage(self),
+            SettingsPage(self),
             NowPlayingPage(self, "Now Playing", NowPlayingCommand())
         ]
         self.index = 0

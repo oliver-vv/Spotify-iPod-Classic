@@ -160,7 +160,50 @@
     </form>
   </div>
 
+  <div class="card" id="power">
+    <h2>Power</h2>
+    <p class="muted">Shut down cleanly before switching the iPod off: cutting power mid-write can corrupt the SD card. After shutdown the Pi stays off until power is removed and re-applied.</p>
+    <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
+      <button id="power-shutdown" type="button" class="secondary" onclick="powerAction('shutdown')">Shut down</button>
+      <button id="power-reboot" type="button" class="secondary" onclick="powerAction('reboot')">Reboot</button>
+      <span id="power-state" class="muted"></span>
+    </div>
+    <div id="power-msg" class="error" style="display:none"></div>
+  </div>
+
   <p class="muted">Portal: {{ portal_url }}</p>
+
+  <script>
+  window.powerAction = async function (action) {
+    const label = action === 'reboot' ? 'Reboot the iPod?' : 'Shut down the iPod? You can switch it off once the screen goes dark.';
+    if (!confirm(label)) return;
+    const btns = [document.getElementById('power-shutdown'), document.getElementById('power-reboot')];
+    const state = document.getElementById('power-state'), msg = document.getElementById('power-msg');
+    msg.style.display = 'none';
+    btns.forEach((b) => { b.disabled = true; });
+    state.innerHTML = '<span class="spin"></span> ' + (action === 'reboot' ? 'Rebooting…' : 'Shutting down…');
+    let data = null, ok = false;
+    try {
+      const res = await fetch('/power/' + action, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+      try { data = await res.json(); } catch (e) {}
+      ok = res.ok && (!data || data.ok !== false);
+    } catch (e) {
+      // Connection dropped: the device is most likely already going down.
+      ok = true;
+    }
+    if (ok) {
+      state.textContent = action === 'reboot'
+        ? 'Rebooting… this page will come back in about a minute.'
+        : 'Shutting down… switch the iPod off once the screen is dark.';
+      if (action === 'reboot') setTimeout(() => location.reload(), 60000);
+    } else {
+      btns.forEach((b) => { b.disabled = false; });
+      state.textContent = '';
+      msg.style.display = 'block';
+      msg.textContent = (data && data.message) || 'Command failed';
+    }
+  };
+  </script>
 
   <script>
   (function () {

@@ -12,6 +12,7 @@ from PIL import ImageTk, Image
 from sys import platform
 import os
 import threading
+import traceback
 import setup_state
 import bt_manager
 
@@ -40,7 +41,16 @@ PREV_KEY_CODE = 2818092 if platform == "darwin" else 0
 NEXT_KEY_CODE = 3080238 if platform == "darwin" else 0
 PLAY_KEY_CODE = 3211296 if platform == "darwin" else 0
 
-SCREEN_TIMEOUT_SECONDS = 60
+# Seconds of wheel inactivity before the display is blanked (DPMS). 0 = never
+# (default: the iPod stays on for as long as it is powered).
+try:
+    SCREEN_TIMEOUT_SECONDS = int(os.environ.get("SCREEN_TIMEOUT_SECONDS", "0") or 0)
+except ValueError:
+    SCREEN_TIMEOUT_SECONDS = 0
+
+# Safety margin applied when the UI is scaled down to fit the panel height
+# (fitting is measured, not guessed; see tkinterApp._fit()).
+FIT_MARGIN = 0.97
 
 wheel_position = -1
 last_button = -1
@@ -90,10 +100,13 @@ def flattenAlpha(img):
 
     return img
 
-def make_qr_image(payload, box_px=4):
+def make_qr_image(payload, max_side):
+    """Render `payload` as a QR no larger than max_side px, with whole-pixel modules."""
     if not segno or not payload:
         return None
     qr = segno.make(payload, error='m')
+    modules, _ = qr.symbol_size(scale=1)   # includes the quiet zone
+    box_px = max(1, int(max_side) // modules)
     # Render to PIL via PNG bytes
     from io import BytesIO
     buf = BytesIO()
@@ -110,7 +123,8 @@ class tkinterApp(tk.Tk):
         tk.Tk.__init__(self, *args, **kwargs)
 
         if (platform == 'darwin'):
-            self.geometry("320x240")
+            w, h = 320, 240
+            self.geometry(f"{w}x{h}")
             SCALE = 0.3
         else:
             # Bare X / no WM: claim the whole screen
@@ -125,32 +139,48 @@ class tkinterApp(tk.Tk):
                 pass
             SCALE = max(0.2, h / 930.0)
 
-        LARGEFONT =("ChicagoFLF", int(72 * SCALE))
-        MED_FONT =("ChicagoFLF", int(52 * SCALE))
-        # creating a container 
-        container = tk.Frame(self)   
-        container.pack(side = "top", fill = "both", expand = True)  
-   
-        container.grid_rowconfigure(0, weight = 1) 
-        container.grid_columnconfigure(0, weight = 1) 
-   
-        # initializing frames to an empty array 
-        self.frames = {}   
-   
-        # iterating through a tuple consisting 
-        # of the different page layouts 
-        for F in (StartPage, NowPlayingFrame, SearchFrame, SetupFrame): 
-   
-            frame = F(container, self) 
-   
-            # initializing frame of that object from 
-            # startpage, page1, page2 respectively with  
-            # for loop 
-            self.frames[F] = frame  
-   
-            frame.grid(row = 0, column = 0, sticky ="nsew") 
-   
-        self.show_frame(StartPage) 
+        self.screen_w = w
+        self.screen_h = h
+        self.container = None
+        self.frames = {}
+        self._build()
+        self._fit()
+        self.show_frame(StartPage)
+
+    def _build(self):
+        """(Re)create every screen with the current SCALE."""
+        global LARGEFONT, MED_FONT
+        LARGEFONT = ("ChicagoFLF", max(6, int(72 * SCALE)))
+        MED_FONT = ("ChicagoFLF", max(5, int(52 * SCALE)))
+        if self.container is not None:
+            self.container.destroy()
+        container = tk.Frame(self)
+        container.pack(side="top", fill="both", expand=True)
+        container.grid_rowconfigure(0, weight=1)
+        container.grid_columnconfigure(0, weight=1)
+        self.container = container
+        self.frames = {}
+        for F in (StartPage, NowPlayingFrame, SearchFrame, SetupFrame):
+            frame = F(container, self)
+            self.frames[F] = frame
+            frame.grid(row=0, column=0, sticky="nsew")
+
+    def _fit(self):
+        """Shrink SCALE until the tallest screen fits the panel height.
+
+        The layouts are top-down grids; anything taller than the screen is
+        silently clipped at the bottom, so measure and rebuild instead of
+        trusting a hard-coded scale factor.
+        """
+        global SCALE
+        for _ in range(4):
+            self.update_idletasks()
+            needed = max(f.winfo_reqheight() for f in self.frames.values())
+            if needed <= self.screen_h:
+                break
+            SCALE = SCALE * (self.screen_h / float(needed)) * FIT_MARGIN
+            print(f"ui: {needed}px needed for {self.screen_h}px screen; rescaling to {SCALE:.3f}")
+            self._build()
    
     # to display the current frame passed as 
     # parameter 
@@ -250,6 +280,7 @@ class SearchFrame(tk.Frame):
 class SetupFrame(tk.Frame):
     def __init__(self, parent, controller):
         tk.Frame.__init__(self, parent)
+        self.controller = controller
         self.configure(bg=SPOT_BLACK)
         self.header_label = tk.Label(
             self, text="Setup", font=LARGEFONT, background=SPOT_BLACK, foreground=SPOT_GREEN
@@ -291,15 +322,24 @@ class SetupFrame(tk.Frame):
             self.progress_label.configure(text="")
         if status.qr_payload and status.qr_payload != self._last_qr:
             self._last_qr = status.qr_payload
-            img = make_qr_image(status.qr_payload, box_px=max(2, int(3 * SCALE)))
-            if img is not None:
-                # Fit QR to roughly half the short screen edge
-                max_side = int(min(self.winfo_screenwidth(), self.winfo_screenheight()) * 0.45)
-                img.thumbnail((max_side, max_side), _resample())
+            # Fit the QR to roughly half the short screen edge, then shrink it if the
+            # text above/below would push this screen past the panel height.
+            screen_h = self.controller.screen_h
+            max_side = int(min(self.controller.screen_w, screen_h) * 0.45)
+            img = None
+            for _ in range(4):
+                img = make_qr_image(status.qr_payload, max_side)
+                if img is None:
+                    break
                 photo = ImageTk.PhotoImage(img)
                 self.qr_label.configure(image=photo)
                 self.qr_label.image = photo
-            else:
+                self.update_idletasks()
+                overflow = self.winfo_reqheight() - screen_h
+                if overflow <= 0 or img.width <= 48:
+                    break
+                max_side = max(40, min(img.width - 1, max_side - overflow))
+            if img is None:
                 self.qr_label.configure(image="", text=status.qr_payload[:40])
         elif not status.qr_payload:
             self._last_qr = None
@@ -311,6 +351,7 @@ class NowPlayingFrame(tk.Frame):
         self.inflated = False
         self.active = False
         self.update_time = False
+        self.showing_volume = False
         self.configure(bg=SPOT_BLACK)
         self.header_label = tk.Label(self, text ="Now Playing", font = LARGEFONT, background=SPOT_BLACK, foreground=SPOT_GREEN) 
         self.header_label.grid(sticky='we', padx=(0, 10))
@@ -370,18 +411,33 @@ class NowPlayingFrame(tk.Frame):
         truncd_context = context_name if context_name else "Now Playing"
         truncd_context = truncd_context if len(truncd_context) < 20 else truncd_context[0:17] + "..."
         self.header_label.configure(text=truncd_context)
-        update_delta = 0 if not now_playing['is_playing'] else (time.time() - now_playing["timestamp"]) * 1000.0
-        adjusted_progress_ms = now_playing['progress'] + update_delta
-        adjusted_remaining_ms = max(0, now_playing['duration'] - adjusted_progress_ms)
-        if self.update_time:
-            progress_txt = ":".join(str(timedelta(milliseconds=adjusted_progress_ms)).split('.')[0].split(':')[1:3])
-            remaining_txt = "-" + ":".join(str(timedelta(milliseconds=adjusted_remaining_ms)).split('.')[0].split(':')[1:3])
-            self.elapsed_time.configure(text=progress_txt)
-            self.remaining_time.configure(text=remaining_txt)
-        self.update_time = not self.update_time
+        now = time.time()
+        duration_ms = max(1, now_playing['duration'])
+        update_delta = 0 if not now_playing['is_playing'] else (now - now_playing["timestamp"]) * 1000.0
+        adjusted_progress_ms = min(duration_ms, now_playing['progress'] + update_delta)
+        adjusted_remaining_ms = max(0, duration_ms - adjusted_progress_ms)
+
+        # iPod Classic behaviour: turning the wheel shows the volume in place of the
+        # track progress for a couple of seconds, then the progress bar comes back.
+        volume = now_playing.get('volume')
+        showing_volume = volume is not None and now < (now_playing.get('volume_until') or 0)
+        if showing_volume:
+            steps = max(1, now_playing.get('volume_steps') or 100)
+            bar_pct = max(0.0, min(1.0, volume / steps))
+            self.elapsed_time.configure(text="Volume")
+            self.remaining_time.configure(text=f"{int(round(bar_pct * 100))}%")
+            self.update_time = True   # refresh the clock right after the overlay goes away
+        else:
+            bar_pct = min(1.0, adjusted_progress_ms / duration_ms)
+            if self.update_time or self.showing_volume:
+                progress_txt = ":".join(str(timedelta(milliseconds=adjusted_progress_ms)).split('.')[0].split(':')[1:3])
+                remaining_txt = "-" + ":".join(str(timedelta(milliseconds=adjusted_remaining_ms)).split('.')[0].split(':')[1:3])
+                self.elapsed_time.configure(text=progress_txt)
+                self.remaining_time.configure(text=remaining_txt)
+            self.update_time = not self.update_time
+        self.showing_volume = showing_volume
         if self.inflated:
-            adjusted_progress_pct = min(1.0, adjusted_progress_ms / now_playing['duration'])
-            self.progress_frame.coords(self.progress, self.progress_start_x, 0, self.progress_width * adjusted_progress_pct + self.progress_start_x, int(72 * SCALE))
+            self.progress_frame.coords(self.progress, self.progress_start_x, 0, self.progress_width * bar_pct + self.progress_start_x, int(72 * SCALE))
         if(now_playing['track_index'] < 0):
             self.context_label.configure(text="")
             return
@@ -422,9 +478,12 @@ class StartPage(tk.Frame):
         contentFrame.grid_rowconfigure(0, weight=1)
         contentFrame.grid_columnconfigure(0, weight=1)
 
-        # scrollbar 
+        # scrollbar. The bar inside is `place`d, so nothing propagates a size to this
+        # canvas: give it an explicit tiny height or Tk's default (7 cm, ~265 px at
+        # 96 dpi) makes the content row taller than the panel and the last list row
+        # gets clipped. sticky="ns" stretches it to the row height anyway.
         self.scrollFrame = tk.Canvas(contentFrame)
-        self.scrollFrame.configure(bg=SPOT_BLACK, width=int(50 * SCALE), bd=0, highlightthickness=4, highlightbackground=SPOT_GREEN)
+        self.scrollFrame.configure(bg=SPOT_BLACK, width=int(50 * SCALE), height=1, bd=0, highlightthickness=4, highlightbackground=SPOT_GREEN)
         self.scrollBar = tk.Canvas(self.scrollFrame, bg=SPOT_GREEN, highlightthickness=0, width=int(20 * SCALE))
         self.scrollBar.place(in_=self.scrollFrame, relx=.5,  y=int(10 * SCALE), anchor="n", relwidth=.6, relheight=.9)
         self.scrollFrame.grid(row=0, column=1, sticky="ns", padx=(0, 30), pady=(0, 10))
@@ -526,7 +585,7 @@ def processInput(app, input):
         last_button = button
     
     now = time.time()
-    if (now - last_interaction > SCREEN_TIMEOUT_SECONDS):
+    if SCREEN_TIMEOUT_SECONDS > 0 and not screen_on:
         print("waking")
         screen_wake()
     last_interaction = now
@@ -689,26 +748,36 @@ sock.setblocking(0)
 socket_list = [sock]
 loop_count = 0
 
+LOOP_TICK_MS = 5
+# Periodic re-render (play indicator, sync state) roughly every 0.6 s
+RENDER_EVERY = int(600 / LOOP_TICK_MS)
+SETUP_POLL_EVERY = int(100 / LOOP_TICK_MS)
+
 def app_main_loop():
     global app, page, loop_count, last_interaction, screen_on
     try:
-        read_sockets = select(socket_list, [], [], 0)[0]
-        for socket in read_sockets:
-            data = socket.recv(128)
-            processInput(app, data)
+        # Drain everything the wheel sent since the last tick (bounded so a
+        # flood can never starve the UI).
+        for _ in range(64):
+            read_sockets = select(socket_list, [], [], 0)[0]
+            if not read_sockets:
+                break
+            for s in read_sockets:
+                processInput(app, s.recv(128))
         loop_count += 1
-        if (loop_count >= 300):
-            if (time.time() - last_interaction > SCREEN_TIMEOUT_SECONDS and screen_on):
+        if (loop_count >= RENDER_EVERY):
+            if (SCREEN_TIMEOUT_SECONDS > 0 and screen_on
+                    and time.time() - last_interaction > SCREEN_TIMEOUT_SECONDS):
                 screen_sleep()
             if not maybe_render_setup(app):
                 render(app, page.render())
             loop_count = 0
-        elif loop_count % 50 == 0:
+        elif loop_count % SETUP_POLL_EVERY == 0:
             maybe_render_setup(app)
     except Exception:
-        pass
+        traceback.print_exc()
     finally:
-        app.after(2, app_main_loop)
+        app.after(LOOP_TICK_MS, app_main_loop)
 
 # Reconnect trusted Bluetooth speakers in the background (never blocks the UI)
 threading.Thread(target=bt_manager.auto_connect, daemon=True).start()

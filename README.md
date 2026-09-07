@@ -108,6 +108,13 @@ The iPod screen walks you through setup with QR codes:
 4. Library sync starts automatically; then the classic sPot menu appears.  
 5. **Bluetooth speaker** — on `http://ipod.local`, put your speaker in pairing mode, tap **Scan for devices**, then **Pair & connect**. The speaker is trusted and reconnected automatically on later boots; PipeWire routes go-librespot's output to it.
 
+## 5. Everyday use
+
+- **Volume** — on the Now Playing screen, turn the wheel: clockwise is louder. The progress bar shows the volume for two seconds, then returns to the track position (like the original iPod).
+- **Turning it off** — do not just cut the power: go-librespot writes its audio cache while playing and SQLite/journald write too, and a cut mid-write can corrupt the SD card. Shut down cleanly first, either from the iPod (**Settings → Shut Down → Yes**) or from `http://ipod.local` (**Power → Shut down**). Once the screen is dark the Pi is halted; it stays halted until power is removed and re-applied, so flip your power switch then. **Reboot** is next to it in both places.
+- The display stays on for as long as the iPod is powered. To blank it after inactivity, set `SCREEN_TIMEOUT_SECONDS=<seconds>` in `/etc/spotifypod/config.env` (any wheel input wakes it).
+- Optional hardware power button: a momentary switch between **GPIO 3 (pin 5)** and GND plus `dtoverlay=gpio-shutdown` in `config.txt` gives a clean shutdown on press and wakes the Pi from halt on the next press. GPIO 3 is unused by this build.
+
 Services (systemd):
 
 - `click.service` — wheel reader (root / libpigpio; built from source on Trixie, where the apt package no longer exists)  

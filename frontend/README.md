@@ -12,6 +12,8 @@ Tkinter UI (ChicagoFLF look) driven by UDP click-wheel events on port **9090**.
 | `player.py` | go-librespot REST client |
 | `datastore.py` | SQLite cache |
 | `setup_state.py` | First-boot Wi‑Fi / Connect / link state |
+| `bt_manager.py` | Bluetooth speakers (bluetoothctl + PipeWire) |
+| `power.py` | Clean shutdown / reboot via logind (polkit rule) |
 
 ## Dev
 
