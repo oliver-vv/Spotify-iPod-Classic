@@ -381,6 +381,14 @@ def _set_sync(state, message="", pct=0):
     _sync_progress["pct"] = pct
 
 
+def _page_progress(label, results, base, span):
+    """Report progress inside a paged fetch: base..base+span percent."""
+    total = results.get("total") or 0
+    done = min(total, (results.get("offset") or 0) + len(results.get("items") or []))
+    pct = base + int(span * done / total) if total else base
+    _set_sync("running", f"{label} {done}/{total}" if total else label, pct)
+
+
 def refresh_data(full: bool = True):
     """
     Sync library metadata. Playlist/album *items* are fetched lazily by default
@@ -410,6 +418,7 @@ def refresh_data(full: bool = True):
                         track["uri"],
                     ),
                 )
+            _page_progress("Saved tracks", results, 5, 15)
             if results.get("next"):
                 results = client.next(results)
             else:
@@ -445,6 +454,7 @@ def refresh_data(full: bool = True):
                 else:
                     DATASTORE.setPlaylist(pl, None, index=idx + offset)
                 totalindex += 1
+            _page_progress("Playlists", results, 40, 25)
             if results.get("next"):
                 results = client.next(results)
             else:
@@ -460,6 +470,7 @@ def refresh_data(full: bool = True):
                 if not full:
                     tracks = tracks  # album responses usually include tracks
                 DATASTORE.setAlbum(album, tracks, index=idx + offset)
+            _page_progress("Albums", results, 65, 15)
             if results.get("next"):
                 results = client.next(results)
             else:

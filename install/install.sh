@@ -62,9 +62,13 @@ apt-get install -y \
   xserver-xorg-core xserver-xorg-video-fbdev xserver-xorg-legacy xinit x11-xserver-utils \
   network-manager avahi-daemon \
   curl ca-certificates unzip fonts-dejavu-core \
-  pipewire pipewire-audio pipewire-alsa wireplumber \
+  pipewire pipewire-audio pipewire-alsa pipewire-pulse wireplumber dbus-user-session \
   libspa-0.2-bluetooth bluez \
+  libogg-dev libvorbis-dev libflac-dev libmpg123-dev libasound2-dev libpulse-dev \
   gcc make
+# (the *-dev packages above pull in the shared libraries the prebuilt go-librespot
+#  binary links against: libvorbis/libogg/libFLAC/libmpg123/libasound/libpulse.
+#  Runtime package names change between Debian releases; the -dev names do not.)
 
 # pigpio (used by click.c) was dropped from the Raspberry Pi OS repos in Trixie.
 # Use the apt package if it exists (Bookworm), otherwise build v79 from source.
@@ -99,6 +103,11 @@ if ! id -u "${SPOTIFYPOD_USER}" >/dev/null 2>&1; then
     --groups audio,video "${SPOTIFYPOD_USER}" || true
 fi
 usermod -aG audio,video "${SPOTIFYPOD_USER}" 2>/dev/null || true
+getent group bluetooth >/dev/null && usermod -aG bluetooth "${SPOTIFYPOD_USER}" 2>/dev/null || true
+SPOTIFYPOD_UID="$(id -u "${SPOTIFYPOD_USER}")"
+# Start a systemd --user instance for this user at boot (pipewire, wireplumber,
+# pipewire-pulse live there), independent of any login session.
+loginctl enable-linger "${SPOTIFYPOD_USER}" 2>/dev/null || true
 
 echo "==> Layout under ${INSTALL_ROOT}"
 mkdir -p "${INSTALL_ROOT}/bin" "${INSTALL_ROOT}/frontend" "${INSTALL_ROOT}/portal" \
@@ -184,6 +193,10 @@ else
   BIN="$(find "${TMP}" -type f -name 'go-librespot' | head -1)"
   if [[ -n "${BIN}" ]]; then
     install -m 755 "${BIN}" "${INSTALL_ROOT}/bin/go-librespot"
+    if ldd "${INSTALL_ROOT}/bin/go-librespot" 2>/dev/null | grep -q 'not found'; then
+      echo "WARN: go-librespot is missing shared libraries and will not start:"
+      ldd "${INSTALL_ROOT}/bin/go-librespot" | grep 'not found'
+    fi
   else
     echo "WARN: go-librespot binary not found in archive"
   fi
@@ -191,7 +204,13 @@ fi
 rm -rf "${TMP}"
 
 echo "==> go-librespot config"
-sed "s/__AUDIO_BACKEND__/${AUDIO_BACKEND}/g" \
+if [[ "${AUDIO_BACKEND}" == "pulseaudio" ]]; then
+  PULSE_SOCKET="/run/user/${SPOTIFYPOD_UID}/pulse/native"
+else
+  PULSE_SOCKET=""
+fi
+sed -e "s/__AUDIO_BACKEND__/${AUDIO_BACKEND}/g" \
+    -e "s|__PULSE_SOCKET__|${PULSE_SOCKET}|g" \
   "${SCRIPT_DIR}/config/go-librespot.yml.template" \
   > "${DATA_DIR}/go-librespot/config.yml"
 chown -R "${SPOTIFYPOD_USER}:${SPOTIFYPOD_USER}" "${DATA_DIR}/go-librespot"
@@ -270,6 +289,13 @@ fi
 if [[ -f /etc/avahi/avahi-daemon.conf ]]; then
   systemctl enable avahi-daemon || true
 fi
+# Wi-Fi power saving on the Zero 2 W drops multicast traffic, which makes mDNS
+# (Spotify Connect discovery, ipod.local) flaky. Disable it.
+mkdir -p /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/spotifypod-wifi-powersave.conf <<EOF
+[connection]
+wifi.powersave = 2
+EOF
 
 echo "==> Fonts (ChicagoFLF if present in repo)"
 mkdir -p /usr/local/share/fonts/spotifypod
@@ -281,7 +307,9 @@ fi
 
 echo "==> systemd units"
 install -m 644 "${SCRIPT_DIR}/systemd/click.service" /etc/systemd/system/click.service
-install -m 644 "${SCRIPT_DIR}/systemd/go-librespot.service" /etc/systemd/system/go-librespot.service
+sed "s/__UID__/${SPOTIFYPOD_UID}/g" "${SCRIPT_DIR}/systemd/go-librespot.service" \
+  > /etc/systemd/system/go-librespot.service
+chmod 644 /etc/systemd/system/go-librespot.service
 install -m 644 "${SCRIPT_DIR}/systemd/spotifypod.service" /etc/systemd/system/spotifypod.service
 install -m 644 "${SCRIPT_DIR}/systemd/spotifypod-portal.service" /etc/systemd/system/spotifypod-portal.service
 systemctl daemon-reload

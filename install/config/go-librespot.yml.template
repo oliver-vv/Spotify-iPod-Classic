@@ -17,6 +17,8 @@ server:
   port: 3678
 
 audio_backend: __AUDIO_BACKEND__
+# pulseaudio backend only: pipewire-pulse socket of the spotifypod user (filled by install.sh)
+audio_backend_runtime_socket: '__PULSE_SOCKET__'
 audio_device: default
 
 cache:

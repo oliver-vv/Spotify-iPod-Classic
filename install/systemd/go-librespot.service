@@ -1,17 +1,20 @@
 [Unit]
 Description=go-librespot Spotify Connect player
-After=network-online.target sound.target
-Wants=network-online.target
+After=network-online.target sound.target avahi-daemon.service user@__UID__.service
+Wants=network-online.target avahi-daemon.service user@__UID__.service
 
 [Service]
 Type=simple
 User=spotifypod
 Group=spotifypod
 Environment=HOME=/var/lib/spotifypod
+# PipeWire / pipewire-pulse for this user run in user@__UID__.service (lingering enabled by install.sh)
+Environment=XDG_RUNTIME_DIR=/run/user/__UID__
+Environment=PULSE_SERVER=unix:/run/user/__UID__/pulse/native
 ExecStart=/opt/spotifypod/bin/go-librespot -config_dir /var/lib/spotifypod/go-librespot
 Restart=on-failure
 RestartSec=3
-SupplementaryGroups=audio
+SupplementaryGroups=audio bluetooth
 
 [Install]
 WantedBy=multi-user.target
