@@ -138,6 +138,7 @@ pageSize = 50
 has_internet = False
 sp: Optional[spotipy.Spotify] = None
 _sync_progress = {"state": "idle", "message": "", "pct": 0}
+_sync_lock = threading.Lock()
 sleep_time = 0.3
 
 
@@ -275,9 +276,11 @@ def get_playlist(id):
 def get_show(id):
     results = _client().show(id)
     show = results["name"]
-    publisher = results["publisher"]
+    publisher = results.get("publisher") or ""
     episodes = []
-    for item in results.get("episodes", {}).get("items") or []:
+    for item in (results.get("episodes") or {}).get("items") or []:
+        if not item:
+            continue
         episodes.append(UserEpisode(item["name"], publisher, show, item["uri"]))
     return (UserShow(results["name"], publisher, len(episodes), results["uri"]), episodes)
 
@@ -360,11 +363,14 @@ def parse_album(album):
 
 
 def parse_show(show):
-    publisher = show["publisher"]
+    # 'publisher' is no longer guaranteed on saved-show objects (2026 API)
+    publisher = show.get("publisher") or ""
     episodes = []
     if "episodes" not in show:
         return get_show(show["id"])
-    for episode in show["episodes"]["items"]:
+    for episode in (show["episodes"] or {}).get("items") or []:
+        if not episode:
+            continue
         episodes.append(
             UserEpisode(episode["name"], publisher, show["name"], episode["uri"])
         )
@@ -398,6 +404,18 @@ def refresh_data(full: bool = True):
     if init_spotify() is None:
         _set_sync("error", "Not authenticated")
         return
+    # Only one sync at a time: two concurrent runs would both clear() the
+    # datastore and fight over the progress display.
+    if not _sync_lock.acquire(blocking=False):
+        print("refresh_data: sync already running, ignoring request")
+        return
+    try:
+        _refresh_data_locked(full)
+    finally:
+        _sync_lock.release()
+
+
+def _refresh_data_locked(full: bool):
     _set_sync("running", "Starting…", 0)
     DATASTORE.clear()
     client = _client()
@@ -495,12 +513,21 @@ def refresh_data(full: bool = True):
             print("recently played failed:", exc)
 
         _set_sync("running", "Podcasts…", 90)
-        results = client.current_user_saved_shows(limit=pageSize)
-        if results.get("items"):
-            for idx, item in enumerate(results["items"]):
-                show, episodes = parse_show(item["show"])
+        try:
+            results = client.current_user_saved_shows(limit=pageSize)
+            for idx, item in enumerate(results.get("items") or []):
+                if not item or not item.get("show"):
+                    continue
+                try:
+                    show, episodes = parse_show(item["show"])
+                except Exception as exc:
+                    print("skipping show:", exc)
+                    continue
                 DATASTORE.setShow(show, episodes, index=idx)
-        print("Spotify Shows fetched")
+            print("Spotify Shows fetched")
+        except Exception as exc:
+            # Podcasts are optional; never fail the whole sync over them
+            print("saved shows failed:", exc)
 
         _set_sync("done", "Library synced", 100)
     except Exception as exc:

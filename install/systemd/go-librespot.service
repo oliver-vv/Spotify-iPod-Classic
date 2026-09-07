@@ -11,7 +11,8 @@ Environment=HOME=/var/lib/spotifypod
 # PipeWire / pipewire-pulse for this user run in user@__UID__.service (lingering enabled by install.sh)
 Environment=XDG_RUNTIME_DIR=/run/user/__UID__
 Environment=PULSE_SERVER=unix:/run/user/__UID__/pulse/native
-ExecStart=/opt/spotifypod/bin/go-librespot -config_dir /var/lib/spotifypod/go-librespot
+# NB: two dashes. go-librespot uses pflag; "-config_dir" is parsed as "-c onfig_dir".
+ExecStart=/opt/spotifypod/bin/go-librespot --config_dir /var/lib/spotifypod/go-librespot
 Restart=on-failure
 RestartSec=3
 SupplementaryGroups=audio bluetooth
