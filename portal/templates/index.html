@@ -81,6 +81,13 @@
     .badge.on { background: var(--fg); color: #000; }
     .actions { display: flex; flex-wrap: wrap; gap: 0.25rem; }
     .actions form { display: inline; margin: 0; }
+    .spin {
+      display: inline-block; width: 0.9em; height: 0.9em; vertical-align: -0.15em;
+      border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    button:disabled { opacity: 0.6; cursor: default; }
   </style>
 </head>
 <body>
@@ -109,75 +116,24 @@
         {% if library %}<span class="ok">ready</span>{% else %}<span class="muted">empty</span>{% endif %}
       </li>
       <li>Sync: <span class="muted">{{ sync.state }} — {{ sync.message }} ({{ sync.pct }}%)</span></li>
-      <li>Audio output:
-        {% if bt.default_sink %}<span class="ok">{{ bt.default_sink.description }}</span>
-        {% elif bt.connected %}<span class="muted">speaker connected, waiting for PipeWire sink…</span>
-        {% else %}<span class="bad">none</span><span class="muted"> — pair a Bluetooth speaker below</span>{% endif %}
-      </li>
+      <li>Audio output: <span id="audio-out" class="muted">checking…</span></li>
     </ul>
   </div>
 
   <div class="card" id="bt">
     <h2>Bluetooth speaker</h2>
-    {% if not bt.available %}
-      <p class="bad">No Bluetooth adapter available.</p>
-      <p class="muted">Check <code>systemctl status bluetooth</code> and <code>rfkill list</code> on the Pi.</p>
-    {% else %}
-      <p class="muted">Put your speaker in pairing mode, then scan. Scanning takes about 8 seconds.</p>
-      <form method="post" action="{{ url_for('bt_scan') }}">
-        <button type="submit">Scan for devices</button>
-      </form>
-      {% if bt.devices %}
-      <ul class="devices">
-        {% for d in bt.devices %}
-        <li>
-          <div class="dev-name">{{ d.label }}<br/><span class="dev-mac">{{ d.mac }}</span></div>
-          {% if d.connected %}<span class="badge on">connected</span>
-          {% elif d.paired %}<span class="badge">paired</span>{% endif %}
-          <div class="actions">
-            {% if d.connected %}
-              <form method="post" action="{{ url_for('bt_disconnect') }}">
-                <input type="hidden" name="mac" value="{{ d.mac }}" />
-                <button class="secondary small" type="submit">Disconnect</button>
-              </form>
-            {% elif d.paired %}
-              <form method="post" action="{{ url_for('bt_connect') }}">
-                <input type="hidden" name="mac" value="{{ d.mac }}" />
-                <button class="small" type="submit">Connect</button>
-              </form>
-            {% else %}
-              <form method="post" action="{{ url_for('bt_pair') }}">
-                <input type="hidden" name="mac" value="{{ d.mac }}" />
-                <button class="small" type="submit">Pair &amp; connect</button>
-              </form>
-            {% endif %}
-            {% if d.paired %}
-              <form method="post" action="{{ url_for('bt_forget') }}"
-                    onsubmit="return confirm('Forget {{ d.label|e }}?');">
-                <input type="hidden" name="mac" value="{{ d.mac }}" />
-                <button class="secondary small" type="submit">Forget</button>
-              </form>
-            {% endif %}
-          </div>
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <p class="muted">No devices known yet.</p>
-      {% endif %}
-
-      {% if bt.sinks|length > 1 %}
-      <h2 style="font-size:1rem">Audio output</h2>
-      <form method="post" action="{{ url_for('audio_default') }}">
-        <select name="sink" style="padding:0.6rem;border-radius:8px;background:#111;color:#fff;border:1px solid #444">
-          {% for s in bt.sinks %}
-          <option value="{{ s.id }}" {% if s.default %}selected{% endif %}>{{ s.description }}</option>
-          {% endfor %}
-        </select>
-        <button class="small" type="submit">Use as output</button>
-      </form>
-      {% endif %}
-    {% endif %}
+    <p class="muted">Put your speaker in pairing mode, then scan. Devices appear while scanning.</p>
+    <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
+      <button id="bt-scan" type="button" onclick="btScan()">Scan for devices</button>
+      <span id="bt-scan-state" class="muted"></span>
+    </div>
+    <div id="bt-msg" class="error" style="display:none"></div>
+    <ul id="bt-devices" class="devices"><li class="muted">Loading…</li></ul>
+    <div id="bt-sinks" style="display:none;margin-top:0.75rem">
+      <span class="muted">Output:</span>
+      <select id="bt-sink-select" style="padding:0.5rem;border-radius:8px;background:#111;color:#fff;border:1px solid #444"></select>
+      <button class="small" type="button" onclick="btSetSink()">Use</button>
+    </div>
   </div>
 
   <div class="card">
@@ -204,5 +160,120 @@
   </div>
 
   <p class="muted">Portal: {{ portal_url }}</p>
+
+  <script>
+  (function () {
+    const $ = (id) => document.getElementById(id);
+    const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    let pollTimer = null, busy = {}, lastScanning = false, scanPollsLeft = 0;
+
+    async function api(path, body) {
+      const res = await fetch(path, {
+        method: body ? 'POST' : 'GET',
+        headers: body ? {'Content-Type': 'application/json'} : {},
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      let data = {};
+      try { data = await res.json(); } catch (e) {}
+      if (!res.ok && data.ok === undefined) data = {ok: false, message: res.statusText};
+      return data;
+    }
+
+    function showMsg(text) {
+      const el = $('bt-msg');
+      if (!text) { el.style.display = 'none'; el.textContent = ''; return; }
+      el.style.display = 'block'; el.textContent = text;
+    }
+
+    function render(st) {
+      // status card line
+      const out = $('audio-out');
+      if (st.default_sink) { out.className = 'ok'; out.textContent = st.default_sink.description; }
+      else if (st.connected && st.connected.length) { out.className = 'muted'; out.textContent = 'speaker connected, waiting for PipeWire sink…'; }
+      else { out.className = 'bad'; out.textContent = 'none — pair a Bluetooth speaker below'; }
+
+      // scan button
+      const scanBtn = $('bt-scan'), scanState = $('bt-scan-state');
+      scanBtn.disabled = !st.available || !!st.scanning;
+      scanBtn.innerHTML = st.scanning ? '<span class="spin"></span> Scanning…' : 'Scan for devices';
+      scanState.textContent = st.available ? '' : 'No Bluetooth adapter found (check: systemctl status bluetooth).';
+
+      // device list
+      const ul = $('bt-devices');
+      if (!st.available) { ul.innerHTML = ''; return; }
+      if (!st.devices.length) {
+        ul.innerHTML = '<li class="muted">' + (st.scanning ? 'Searching…' : 'No devices known yet. Tap “Scan for devices”.') + '</li>';
+      } else {
+        ul.innerHTML = st.devices.map((d) => {
+          const b = busy[d.mac];
+          const badge = d.connected ? '<span class="badge on">connected</span>' : (d.paired ? '<span class="badge">paired</span>' : '');
+          let actions = '';
+          if (b) actions = '<span class="muted"><span class="spin"></span> ' + esc(b) + '</span>';
+          else if (d.connected) actions = btn('Disconnect', 'disconnect', d, 'secondary');
+          else if (d.paired) actions = btn('Connect', 'connect', d, '');
+          else actions = btn('Pair &amp; connect', 'pair', d, '');
+          if (!b && d.paired) actions += btn('Forget', 'forget', d, 'secondary');
+          return '<li><div class="dev-name">' + esc(d.label) + '<br/><span class="dev-mac">' + esc(d.mac) + '</span></div>'
+               + badge + '<div class="actions">' + actions + '</div></li>';
+        }).join('');
+      }
+
+      // sinks
+      const sinksBox = $('bt-sinks'), sel = $('bt-sink-select');
+      if (st.sinks && st.sinks.length > 1) {
+        sinksBox.style.display = 'block';
+        sel.innerHTML = st.sinks.map((s) => '<option value="' + s.id + '"' + (s.default ? ' selected' : '') + '>' + esc(s.description) + '</option>').join('');
+      } else sinksBox.style.display = 'none';
+    }
+
+    function btn(label, action, d, cls) {
+      return '<button type="button" class="small ' + cls + '" data-action="' + action
+           + '" data-mac="' + esc(d.mac) + '" data-label="' + esc(d.label) + '">' + label + '</button>';
+    }
+    $('bt-devices').addEventListener('click', (ev) => {
+      const b = ev.target.closest('button[data-action]');
+      if (b) window.btAction(b.dataset.action, b.dataset.mac, b.dataset.label);
+    });
+
+    async function refresh() {
+      const st = await api('/api/bt');
+      if (st.error) showMsg(st.error);
+      render(st);
+      // keep polling while scanning, plus a few extra rounds so late names show up
+      if (st.scanning) { lastScanning = true; scanPollsLeft = 3; schedule(1500); }
+      else if (lastScanning && scanPollsLeft-- > 0) schedule(1500);
+      else { lastScanning = false; schedule(Object.keys(busy).length ? 1500 : 10000); }
+    }
+    function schedule(ms) { clearTimeout(pollTimer); pollTimer = setTimeout(refresh, ms); }
+
+    window.btScan = async function () {
+      showMsg('');
+      $('bt-scan').disabled = true;
+      $('bt-scan').innerHTML = '<span class="spin"></span> Scanning…';
+      const r = await api('/bt/scan', {seconds: 12});
+      if (r.ok === false) showMsg(r.message || 'Scan failed');
+      schedule(800);
+    };
+
+    window.btAction = async function (action, mac, label) {
+      if (action === 'forget' && !confirm('Forget ' + label + '?')) return;
+      showMsg('');
+      busy[mac] = {pair: 'Pairing…', connect: 'Connecting…', disconnect: 'Disconnecting…', forget: 'Removing…'}[action];
+      render(await api('/api/bt'));
+      const r = await api('/bt/' + action, {mac});
+      delete busy[mac];
+      if (r.ok === false) showMsg(r.message || (action + ' failed'));
+      refresh();
+    };
+
+    window.btSetSink = async function () {
+      const r = await api('/audio/default', {sink: $('bt-sink-select').value});
+      if (r.ok === false) showMsg(r.message || 'Could not change output');
+      refresh();
+    };
+
+    refresh();
+  })();
+  </script>
 </body>
 </html>

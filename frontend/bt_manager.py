@@ -5,8 +5,12 @@ Drives bluez through `bluetoothctl` (non-interactive mode) and inspects the
 PipeWire graph through `pw-dump` / `wpctl`. Everything is best-effort: a
 missing adapter or a PipeWire that is not running just yields empty results.
 
-Used by the setup portal (pair / connect / forget) and by the UI at startup
-(auto-reconnect to trusted speakers).
+Used by the setup portal (scan / pair / connect / forget, via JSON) and by the
+UI at startup (auto-reconnect to trusted speakers).
+
+NB: `bluetoothctl --timeout N` means "keep running for N seconds" (it is meant
+for `scan on`), NOT "give up after N seconds". Never pass it for one-shot
+commands, or every call blocks for the full N seconds.
 """
 from __future__ import annotations
 
@@ -14,17 +18,25 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Optional
 
 # PipeWire tools need the user's runtime dir; systemd sets it via pam or Environment=
 os.environ.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
 
 MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_DEVICE_LINE_RE = re.compile(r"Device\s+(([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s*(.*)$")
 
 
-def _run(args: list[str], timeout: float = 30) -> tuple[int, str]:
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
+
+def _run(args: list[str], timeout: float = 10) -> tuple[int, str]:
+    """Run a one-shot command; `timeout` is a hard cap, the process is killed after it."""
     try:
         proc = subprocess.run(
             args, capture_output=True, text=True, timeout=timeout, check=False
@@ -32,23 +44,19 @@ def _run(args: list[str], timeout: float = 30) -> tuple[int, str]:
     except FileNotFoundError:
         return 127, f"{args[0]}: not installed"
     except subprocess.TimeoutExpired:
-        return 124, f"{' '.join(args)}: timed out"
-    return proc.returncode, (proc.stdout + proc.stderr)
+        return 124, f"{' '.join(args)}: timed out after {timeout:.0f}s"
+    return proc.returncode, _strip_ansi(proc.stdout + proc.stderr)
 
 
-def _btctl(*cmd: str, timeout: float = 30, agent: bool = False) -> tuple[int, str]:
+def _btctl(*cmd: str, timeout: float = 10, agent: bool = False) -> tuple[int, str]:
+    """One-shot bluetoothctl command. Exits as soon as the command completes."""
     args = ["bluetoothctl"]
     if agent:
         # Speakers use "Just Works" pairing; register a no-IO agent so bluez does not
         # wait for a PIN prompt nobody can answer.
         args += ["--agent", "NoInputNoOutput"]
-    args += ["--timeout", str(int(timeout))]
     args += list(cmd)
-    return _run(args, timeout=timeout + 5)
-
-
-def _strip_ansi(text: str) -> str:
-    return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+    return _run(args, timeout=timeout)
 
 
 def valid_mac(mac: str) -> bool:
@@ -77,20 +85,23 @@ class BtDevice:
     paired: bool = False
     trusted: bool = False
     connected: bool = False
-    icon: str = ""
-    audio: bool = False  # advertises A2DP sink / audio profile
 
     @property
     def label(self) -> str:
         return self.name if self.name and self.name != self.mac else self.mac
 
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d["label"] = self.label
+        return d
+
 
 def _parse_device_lines(out: str) -> list[tuple[str, str]]:
     found = []
-    for line in _strip_ansi(out).splitlines():
-        m = re.match(r"^\s*Device\s+(\S+)\s*(.*)$", line)
-        if m and valid_mac(m.group(1)):
-            found.append((m.group(1), m.group(2).strip()))
+    for line in out.splitlines():
+        m = _DEVICE_LINE_RE.search(line)
+        if m:
+            found.append((m.group(1).upper(), m.group(3).strip()))
     return found
 
 
@@ -100,12 +111,12 @@ def info(mac: str) -> Optional[BtDevice]:
     rc, out = _btctl("info", mac, timeout=5)
     if rc != 0 or "Device" not in out:
         return None
-    dev = BtDevice(mac=mac, name=mac)
-    for line in _strip_ansi(out).splitlines():
+    dev = BtDevice(mac=mac.upper(), name=mac.upper())
+    for line in out.splitlines():
         line = line.strip()
         if line.startswith("Name:"):
             dev.name = line.split(":", 1)[1].strip()
-        elif line.startswith("Alias:") and dev.name == mac:
+        elif line.startswith("Alias:") and dev.name == dev.mac:
             dev.name = line.split(":", 1)[1].strip()
         elif line.startswith("Paired:"):
             dev.paired = line.endswith("yes")
@@ -113,15 +124,11 @@ def info(mac: str) -> Optional[BtDevice]:
             dev.trusted = line.endswith("yes")
         elif line.startswith("Connected:"):
             dev.connected = line.endswith("yes")
-        elif line.startswith("Icon:"):
-            dev.icon = line.split(":", 1)[1].strip()
-        elif line.startswith("UUID:") and ("Audio Sink" in line or "Advanced Audio" in line):
-            dev.audio = True
     return dev
 
 
 def _device_set(filter_name: str) -> Optional[set[str]]:
-    """MACs matching a bluetoothctl `devices <Filter>` (bluez >= 5.65), else None."""
+    """MACs matching `bluetoothctl devices <Filter>` (bluez >= 5.65), else None."""
     rc, out = _btctl("devices", filter_name, timeout=5)
     if rc != 0 or "Usage" in out or "Invalid" in out:
         return None
@@ -153,26 +160,110 @@ def devices() -> list[BtDevice]:
                     paired=mac in paired,
                     trusted=mac in trusted,
                     connected=mac in connected,
-                    audio=True,  # unknown without `info`; don't hide anything
                 )
             )
-    # Connected first, then paired, then named discoveries, nameless last
-    result.sort(
-        key=lambda d: (
-            not d.connected,
-            not d.paired,
-            not d.audio,
-            d.name == d.mac,
-            d.name.lower(),
-        )
-    )
     return result
 
 
+# --------------------------------------------------------------------------- scanning
+
+
+class _Scanner:
+    """Background discovery. Parses bluetoothctl's live [NEW]/[CHG] output so the
+    portal can show devices while the scan is still running, and remembers names
+    after bluez has expired the temporary device objects."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._proc: Optional[subprocess.Popen] = None
+        self._seen: dict[str, str] = {}  # mac -> name (from this or earlier scans)
+        self._started = 0.0
+
+    @property
+    def scanning(self) -> bool:
+        with self._lock:
+            return self._proc is not None and self._proc.poll() is None
+
+    def start(self, seconds: int = 12) -> bool:
+        with self._lock:
+            if self._proc is not None and self._proc.poll() is None:
+                return False  # already scanning
+            power_on()
+            try:
+                self._proc = subprocess.Popen(
+                    ["bluetoothctl", "--timeout", str(int(seconds)), "scan", "on"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+            except FileNotFoundError:
+                self._proc = None
+                return False
+            self._started = time.time()
+            threading.Thread(target=self._reader, args=(self._proc,), daemon=True).start()
+            return True
+
+    def stop(self) -> None:
+        with self._lock:
+            proc = self._proc
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+    def _reader(self, proc: subprocess.Popen) -> None:
+        assert proc.stdout is not None
+        for raw in proc.stdout:
+            line = _strip_ansi(raw).strip()
+            # [NEW] Device AA:BB:.. Name       |  [CHG] Device AA:BB:.. Name: Foo
+            m = _DEVICE_LINE_RE.search(line)
+            if not m or "[DEL]" in line:
+                continue
+            mac, rest = m.group(1).upper(), m.group(3).strip()
+            name = None
+            if line.startswith("[NEW]") or line.startswith("Device"):
+                name = rest
+            elif rest.startswith("Name:") or rest.startswith("Alias:"):
+                name = rest.split(":", 1)[1].strip()
+            if name and name.replace("-", ":").upper() == mac:
+                name = None  # bluez uses the address as a placeholder name
+            with self._lock:
+                if name and not name.startswith("RSSI") and not name.startswith("TxPower"):
+                    self._seen[mac] = name
+                else:
+                    self._seen.setdefault(mac, mac)
+        proc.wait()
+
+    def seen(self) -> dict[str, str]:
+        with self._lock:
+            return dict(self._seen)
+
+    def forget(self, mac: str) -> None:
+        with self._lock:
+            self._seen.pop(mac.upper(), None)
+
+
+_scanner = _Scanner()
+
+
+def start_scan(seconds: int = 12) -> bool:
+    return _scanner.start(seconds)
+
+
+def stop_scan() -> None:
+    _scanner.stop()
+
+
+def is_scanning() -> bool:
+    return _scanner.scanning
+
+
 def scan(seconds: int = 8) -> None:
-    """Discover nearby devices for `seconds`. Results show up in devices()."""
+    """Blocking discovery (used before pairing a device bluez no longer knows)."""
     power_on()
-    _btctl("scan", "on", timeout=seconds)
+    _run(["bluetoothctl", "--timeout", str(int(seconds)), "scan", "on"], timeout=seconds + 5)
 
 
 # --------------------------------------------------------------------------- actions
@@ -181,13 +272,21 @@ def scan(seconds: int = 8) -> None:
 def pair_and_connect(mac: str) -> tuple[bool, str]:
     if not valid_mac(mac):
         return False, "Invalid address"
+    mac = mac.upper()
+    stop_scan()  # pairing while discovering is unreliable
     power_on()
-    log = []
     dev = info(mac)
-    if not dev or not dev.paired:
-        rc, out = _btctl("pair", mac, timeout=30, agent=True)
+    if dev is None:
+        # bluez expires unpaired devices ~30s after a scan; find it again first
+        scan(8)
+        dev = info(mac)
+        if dev is None:
+            return False, "Speaker not found. Make sure it is in pairing mode and scan again."
+    log = []
+    if not dev.paired:
+        rc, out = _btctl("pair", mac, timeout=45, agent=True)
         log.append(out.strip())
-        if rc != 0 and "AlreadyExists" not in out:
+        if rc != 0 and "AlreadyExists" not in out and "Pairing successful" not in out:
             return False, "Pairing failed. Put the speaker in pairing mode and retry.\n" + "\n".join(log)
     _btctl("trust", mac, timeout=5)
     ok, msg = connect(mac)
@@ -198,31 +297,32 @@ def pair_and_connect(mac: str) -> tuple[bool, str]:
 def connect(mac: str) -> tuple[bool, str]:
     if not valid_mac(mac):
         return False, "Invalid address"
-    rc, out = _btctl("connect", mac, timeout=20)
-    ok = rc == 0 and "Connection successful" in out
+    rc, out = _btctl("connect", mac.upper(), timeout=25)
+    ok = "Connection successful" in out or (rc == 0 and "Failed" not in out)
     if ok:
         # Give PipeWire a moment to create the sink, then make it the default.
-        for _ in range(10):
+        for _ in range(12):
             time.sleep(0.5)
             sink = sink_for_mac(mac)
             if sink:
                 set_default_sink(sink["id"])
                 break
-    return ok, _strip_ansi(out).strip()
+    return ok, out.strip()
 
 
 def disconnect(mac: str) -> tuple[bool, str]:
     if not valid_mac(mac):
         return False, "Invalid address"
-    rc, out = _btctl("disconnect", mac, timeout=10)
-    return rc == 0, _strip_ansi(out).strip()
+    rc, out = _btctl("disconnect", mac.upper(), timeout=10)
+    return rc == 0, out.strip()
 
 
 def forget(mac: str) -> tuple[bool, str]:
     if not valid_mac(mac):
         return False, "Invalid address"
-    rc, out = _btctl("remove", mac, timeout=10)
-    return rc == 0, _strip_ansi(out).strip()
+    rc, out = _btctl("remove", mac.upper(), timeout=10)
+    _scanner.forget(mac)
+    return rc == 0, out.strip()
 
 
 def auto_connect(delay: float = 5.0) -> None:
@@ -244,7 +344,7 @@ def auto_connect(delay: float = 5.0) -> None:
 
 def audio_sinks() -> list[dict]:
     """PipeWire audio sinks: [{id, name, description, default}]."""
-    rc, out = _run(["pw-dump"], timeout=10)
+    rc, out = _run(["pw-dump"], timeout=5)
     if rc != 0:
         return []
     try:
@@ -274,6 +374,8 @@ def audio_sinks() -> list[dict]:
                 )
     for s in sinks:
         s["default"] = default_name is not None and s["name"] == default_name
+    if sinks and not any(s["default"] for s in sinks) and len(sinks) == 1:
+        sinks[0]["default"] = True  # single sink is effectively the default
     return sinks
 
 
@@ -290,21 +392,40 @@ def set_default_sink(sink_id) -> bool:
     return rc == 0
 
 
+# --------------------------------------------------------------------------- status
+
+
 def status() -> dict:
-    """Everything the portal needs in one call."""
+    """JSON-serialisable snapshot for the portal."""
     try:
         avail = available()
     except Exception:
         avail = False
-    devs = devices() if avail else []
+    devs: dict[str, BtDevice] = {}
+    if avail:
+        for d in devices():
+            devs[d.mac] = d
+        # Devices seen during scans that bluez may already have expired
+        for mac, name in _scanner.seen().items():
+            if mac in devs:
+                if devs[mac].name == mac and name != mac:
+                    devs[mac].name = name
+            else:
+                devs[mac] = BtDevice(mac=mac, name=name)
+    ordered = sorted(
+        devs.values(),
+        key=lambda d: (not d.connected, not d.paired, d.name == d.mac, d.name.lower()),
+    )
     try:
         sinks = audio_sinks()
     except Exception:
         sinks = []
+    default_sink = next((s for s in sinks if s["default"]), None)
     return {
         "available": avail,
-        "devices": devs,
-        "connected": [d for d in devs if d.connected],
+        "scanning": _scanner.scanning,
+        "devices": [d.to_dict() for d in ordered],
+        "connected": [d.to_dict() for d in ordered if d.connected],
         "sinks": sinks,
-        "default_sink": next((s for s in sinks if s["default"]), None),
+        "default_sink": default_sink,
     }

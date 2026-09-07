@@ -35,10 +35,6 @@ import spotify_manager  # noqa: E402
 app = Flask(__name__)
 
 
-def _render(**extra):
-    return render_template("index.html", **_status_ctx(), **extra)
-
-
 def _request_base() -> str:
     # Prefer Host header so QR / phone use the IP they already hit
     host = request.host
@@ -51,12 +47,9 @@ def _status_ctx():
     linked = spotify_manager.has_token()
     sync = spotify_manager.sync_progress()
     library = spotify_manager.DATASTORE.has_library()
-    try:
-        bt = bt_manager.status()
-    except Exception as exc:  # portal must stay usable without Bluetooth
-        bt = {"available": False, "devices": [], "connected": [], "sinks": [], "error": str(exc)}
+    # Bluetooth / audio state is loaded asynchronously by the page via /api/bt so
+    # the page itself renders instantly.
     return {
-        "bt": bt,
         "wifi": wifi,
         "connect_logged_in": connected,
         "webapi_linked": linked,
@@ -142,22 +135,41 @@ def sync_now():
     return redirect(url_for("index"))
 
 
+# ---------------------------------------------------------------- Bluetooth (JSON API)
+# All endpoints return JSON; the page drives them with fetch() so nothing reloads.
+
+
+def _json_body() -> dict:
+    return request.get_json(silent=True) or request.form or {}
+
+
+@app.get("/api/bt")
+def api_bt():
+    try:
+        return bt_manager.status()
+    except Exception as exc:
+        return {"available": False, "scanning": False, "devices": [], "connected": [],
+                "sinks": [], "default_sink": None, "error": str(exc)}
+
+
 @app.post("/bt/scan")
 def bt_scan():
     if not bt_manager.available():
-        return _render(error="No Bluetooth adapter found (is bluetooth.service running?)")
-    bt_manager.scan(seconds=8)
-    return redirect(url_for("index", _anchor="bt"))
+        return {"ok": False, "message": "No Bluetooth adapter found (is bluetooth.service running?)"}, 503
+    seconds = int(_json_body().get("seconds") or 12)
+    bt_manager.start_scan(seconds=max(3, min(seconds, 30)))
+    return {"ok": True, "scanning": True}
 
 
 def _bt_action(action):
-    mac = (request.form.get("mac") or "").strip().upper()
+    mac = str(_json_body().get("mac") or "").strip().upper()
     if not bt_manager.valid_mac(mac):
-        return _render(error="Invalid Bluetooth address")
-    ok, msg = action(mac)
-    if ok:
-        return redirect(url_for("index", _anchor="bt"))
-    return _render(error=msg or "Bluetooth action failed")
+        return {"ok": False, "message": "Invalid Bluetooth address"}, 400
+    try:
+        ok, msg = action(mac)
+    except Exception as exc:
+        return {"ok": False, "message": str(exc)}, 500
+    return {"ok": ok, "message": msg}, (200 if ok else 502)
 
 
 @app.post("/bt/pair")
@@ -182,21 +194,19 @@ def bt_forget():
 
 @app.post("/audio/default")
 def audio_default():
-    sink_id = (request.form.get("sink") or "").strip()
+    sink_id = str(_json_body().get("sink") or "").strip()
     if not sink_id.isdigit() or not bt_manager.set_default_sink(sink_id):
-        return _render(error="Could not set default audio output")
-    return redirect(url_for("index", _anchor="bt"))
+        return {"ok": False, "message": "Could not set default audio output"}, 502
+    return {"ok": True}
 
 
 @app.get("/api/status")
 def api_status():
     ctx = _status_ctx()
-    bt = ctx.get("bt") or {}
-    ctx["bt"] = {
-        "available": bt.get("available", False),
-        "devices": [vars(d) for d in bt.get("devices", [])],
-        "sinks": bt.get("sinks", []),
-    }
+    try:
+        ctx["bt"] = bt_manager.status()
+    except Exception as exc:
+        ctx["bt"] = {"available": False, "error": str(exc)}
     return ctx
 
 
