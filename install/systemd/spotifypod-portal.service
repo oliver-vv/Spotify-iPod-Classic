@@ -1,5 +1,5 @@
 [Unit]
-Description=sPot setup portal (Wi-Fi / Spotify linking / Bluetooth)
+Description=iPod setup portal (Wi-Fi / Spotify linking / Bluetooth)
 After=network.target bluetooth.service user@__UID__.service
 Wants=user@__UID__.service
 

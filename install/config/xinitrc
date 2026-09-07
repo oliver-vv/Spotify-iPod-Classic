@@ -1,5 +1,5 @@
 #!/bin/sh
-# Minimal X session for sPot — no window manager.
+# Minimal X session for the iPod UI — no window manager.
 cd /opt/spotifypod/frontend || exit 1
 xset s off
 xset s noblank

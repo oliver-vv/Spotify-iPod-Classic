@@ -458,7 +458,7 @@ class StartPage(tk.Frame):
         self.configure(bg=SPOT_BLACK)
         header_container = tk.Canvas(self, bg=SPOT_BLACK, highlightthickness=0, relief='ridge')
         header_container.grid(sticky='we')
-        self.header_label = tk.Label(header_container, text ="sPot", font = LARGEFONT, background=SPOT_BLACK, foreground=SPOT_GREEN) 
+        self.header_label = tk.Label(header_container, text ="iPod", font = LARGEFONT, background=SPOT_BLACK, foreground=SPOT_GREEN) 
         self.header_label.grid(sticky='we', column=1, row=0, padx=(0, 10))
         self.play_indicator = tk.Label(header_container, image=self.space_image, background=SPOT_BLACK)
         self.play_indicator.grid(sticky='w', column=0, row=0, padx=(70 * SCALE,0))

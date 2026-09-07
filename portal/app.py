@@ -1,5 +1,5 @@
 """
-sPot setup portal — Wi-Fi status, Spotify PKCE linking, library sync.
+iPod setup portal — Wi-Fi status, Spotify PKCE linking, library sync.
 Runs on the Pi at http://ipod.local (port 80).
 """
 from __future__ import annotations

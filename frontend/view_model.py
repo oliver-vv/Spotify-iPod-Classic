@@ -601,6 +601,7 @@ class SettingsPage(MenuPage):
     def __init__(self, previous_page):
         super().__init__("Settings", previous_page, has_sub_page=True)
         self.items = [
+            SyncLibraryPage(self),
             ConfirmPage("Shut Down", "Shut down?", self, power.shutdown, "Shutting down..."),
             ConfirmPage("Reboot", "Reboot?", self, power.reboot, "Rebooting..."),
         ]
@@ -613,7 +614,7 @@ class SettingsPage(MenuPage):
 
 class RootPage(MenuPage):
     def __init__(self, previous_page):
-        super().__init__("sPot", previous_page, has_sub_page=True)
+        super().__init__("iPod", previous_page, has_sub_page=True)
         self.pages = [
             ArtistsPage(self),
             AlbumsPage(self),
@@ -621,7 +622,6 @@ class RootPage(MenuPage):
             PlaylistsPage(self),
             ShowsPage(self),
             SearchPage(self),
-            SyncLibraryPage(self),
             SettingsPage(self),
             NowPlayingPage(self, "Now Playing", NowPlayingCommand())
         ]

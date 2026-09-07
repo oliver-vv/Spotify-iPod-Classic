@@ -1,5 +1,5 @@
 [Unit]
-Description=sPot tkinter UI on X (fbdev)
+Description=iPod tkinter UI on X (fbdev)
 After=click.service go-librespot.service systemd-user-sessions.service
 Wants=click.service go-librespot.service
 Conflicts=getty@tty1.service

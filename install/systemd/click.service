@@ -1,5 +1,5 @@
 [Unit]
-Description=sPot click wheel reader (libpigpio, UDP :9090)
+Description=iPod click wheel reader (libpigpio, UDP :9090)
 After=network.target
 # Must NOT run alongside pigpiod: click links libpigpio directly.
 Conflicts=pigpiod.service

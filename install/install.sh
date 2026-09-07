@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sPot / Spotifypod installer for Raspberry Pi OS Lite 64-bit (Bookworm+)
+# iPod / Spotifypod installer for Raspberry Pi OS Lite 64-bit (Bookworm+)
 # Run as root on the Pi:  sudo bash install/install.sh
 set -euo pipefail
 
@@ -250,7 +250,8 @@ if [[ -n "${BOOTCFG}" ]]; then
       -e "s/__BL_PARAM__/${BL_PARAM}/g" \
       "${SCRIPT_DIR}/config/spotifypod-config.txt.snippet" > "${SNIPPET}"
   # Replace any block written by an earlier run (marker line .. enable_tvout=0), then append.
-  sed -i '/^# --- sPot \/ Spotifypod display/,/^enable_tvout=0/d' "${BOOTCFG}"
+  # Match both the current "iPod" marker and the older "sPot" marker from previous installs.
+  sed -i '/^# --- \(iPod\|sPot\) \/ Spotifypod display/,/^enable_tvout=0/d' "${BOOTCFG}"
   echo "" >> "${BOOTCFG}"
   cat "${SNIPPET}" >> "${BOOTCFG}"
   # Comment out vc4-kms-v3d if present (SPI-only display)

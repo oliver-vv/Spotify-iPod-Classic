@@ -1,4 +1,4 @@
-# Frontend (sPot UI)
+# Frontend (iPod UI)
 
 Tkinter UI (ChicagoFLF look) driven by UDP click-wheel events on port **9090**.
 

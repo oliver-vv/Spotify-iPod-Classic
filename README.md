@@ -1,4 +1,4 @@
-# sPot (2026)
+# iPod (2026)
 
 Spotify client for a 4th‑generation iPod Classic housing a **Raspberry Pi Zero 2 W**, Waveshare **ST7789V** SPI LCD, and the original click wheel.
 
@@ -105,12 +105,13 @@ The iPod screen walks you through setup with QR codes:
 1. **Wi‑Fi** — If offline, comitup raises hotspot `iPod-<nnn>`. Scan the Wi‑Fi QR (or join manually). Captive portal at `http://10.41.0.1` lets you pick your home network.  
 2. **Spotify Connect** — In the Spotify phone app, transfer playback to device **`iPod`**. Credentials persist on disk.  
 3. **Link library** — Scan the QR for `http://ipod.local` (or the Pi’s IP). Tap **Authorize with Spotify**. The HTTPS GitHub Pages page relays `code` back to the Pi. If that fails, use **Paste redirect URL**.  
-4. Library sync starts automatically; then the classic sPot menu appears.  
+4. Library sync starts automatically; then the classic iPod menu appears.  
 5. **Bluetooth speaker** — on `http://ipod.local`, put your speaker in pairing mode, tap **Scan for devices**, then **Pair & connect**. The speaker is trusted and reconnected automatically on later boots; PipeWire routes go-librespot's output to it.
 
 ## 5. Everyday use
 
 - **Volume** — on the Now Playing screen, turn the wheel: clockwise is louder. The progress bar shows the volume for two seconds, then returns to the track position (like the original iPod).
+- **Sync library** — **Settings → Sync Library** refreshes playlists and saved tracks from Spotify.
 - **Turning it off** — do not just cut the power: go-librespot writes its audio cache while playing and SQLite/journald write too, and a cut mid-write can corrupt the SD card. Shut down cleanly first, either from the iPod (**Settings → Shut Down → Yes**) or from `http://ipod.local` (**Power → Shut down**). Once the screen is dark the Pi is halted; it stays halted until power is removed and re-applied, so flip your power switch then. **Reboot** is next to it in both places.
 - The display stays on for as long as the iPod is powered. To blank it after inactivity, set `SCREEN_TIMEOUT_SECONDS=<seconds>` in `/etc/spotifypod/config.env` (any wheel input wakes it).
 - Optional hardware power button: a momentary switch between **GPIO 3 (pin 5)** and GND plus `dtoverlay=gpio-shutdown` in `config.txt` gives a clean shutdown on press and wakes the Pi from halt on the next press. GPIO 3 is unused by this build.

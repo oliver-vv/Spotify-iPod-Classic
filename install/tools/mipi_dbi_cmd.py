@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: CC0-1.0
 #
 # Written in 2022 by Noralf Trønnes <noralf@tronnes.org>
-# Vendored for sPot installs when system mipi-dbi-cmd is unavailable.
+# Vendored for iPod installs when system mipi-dbi-cmd is unavailable.
 # https://github.com/notro/panel-mipi-dbi
 
 from __future__ import print_function

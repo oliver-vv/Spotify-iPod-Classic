@@ -1,4 +1,4 @@
-// Let the sPot UI and setup portal (user __USER__) power off / reboot the iPod
+// Let the iPod UI and setup portal (user __USER__) power off / reboot the device
 // through logind without a password. Installed by install/install.sh to
 // /etc/polkit-1/rules.d/50-spotifypod-power.rules (__USER__ is substituted).
 polkit.addRule(function (action, subject) {
