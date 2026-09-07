@@ -27,11 +27,16 @@ if os.path.isfile(_ENV):
             k, _, v = line.partition("=")
             os.environ.setdefault(k.strip(), v.strip().strip("'\""))
 
+import bt_manager  # noqa: E402
 import player  # noqa: E402
 import setup_state  # noqa: E402
 import spotify_manager  # noqa: E402
 
 app = Flask(__name__)
+
+
+def _render(**extra):
+    return render_template("index.html", **_status_ctx(), **extra)
 
 
 def _request_base() -> str:
@@ -46,7 +51,12 @@ def _status_ctx():
     linked = spotify_manager.has_token()
     sync = spotify_manager.sync_progress()
     library = spotify_manager.DATASTORE.has_library()
+    try:
+        bt = bt_manager.status()
+    except Exception as exc:  # portal must stay usable without Bluetooth
+        bt = {"available": False, "devices": [], "connected": [], "sinks": [], "error": str(exc)}
     return {
+        "bt": bt,
         "wifi": wifi,
         "connect_logged_in": connected,
         "webapi_linked": linked,
@@ -132,9 +142,62 @@ def sync_now():
     return redirect(url_for("index"))
 
 
+@app.post("/bt/scan")
+def bt_scan():
+    if not bt_manager.available():
+        return _render(error="No Bluetooth adapter found (is bluetooth.service running?)")
+    bt_manager.scan(seconds=8)
+    return redirect(url_for("index", _anchor="bt"))
+
+
+def _bt_action(action):
+    mac = (request.form.get("mac") or "").strip().upper()
+    if not bt_manager.valid_mac(mac):
+        return _render(error="Invalid Bluetooth address")
+    ok, msg = action(mac)
+    if ok:
+        return redirect(url_for("index", _anchor="bt"))
+    return _render(error=msg or "Bluetooth action failed")
+
+
+@app.post("/bt/pair")
+def bt_pair():
+    return _bt_action(bt_manager.pair_and_connect)
+
+
+@app.post("/bt/connect")
+def bt_connect():
+    return _bt_action(bt_manager.connect)
+
+
+@app.post("/bt/disconnect")
+def bt_disconnect():
+    return _bt_action(bt_manager.disconnect)
+
+
+@app.post("/bt/forget")
+def bt_forget():
+    return _bt_action(bt_manager.forget)
+
+
+@app.post("/audio/default")
+def audio_default():
+    sink_id = (request.form.get("sink") or "").strip()
+    if not sink_id.isdigit() or not bt_manager.set_default_sink(sink_id):
+        return _render(error="Could not set default audio output")
+    return redirect(url_for("index", _anchor="bt"))
+
+
 @app.get("/api/status")
 def api_status():
-    return _status_ctx()
+    ctx = _status_ctx()
+    bt = ctx.get("bt") or {}
+    ctx["bt"] = {
+        "available": bt.get("available", False),
+        "devices": [vars(d) for d in bt.get("devices", [])],
+        "sinks": bt.get("sinks", []),
+    }
+    return ctx
 
 
 if __name__ == "__main__":

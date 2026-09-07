@@ -311,12 +311,24 @@ sed "s/__UID__/${SPOTIFYPOD_UID}/g" "${SCRIPT_DIR}/systemd/go-librespot.service"
   > /etc/systemd/system/go-librespot.service
 chmod 644 /etc/systemd/system/go-librespot.service
 install -m 644 "${SCRIPT_DIR}/systemd/spotifypod.service" /etc/systemd/system/spotifypod.service
-install -m 644 "${SCRIPT_DIR}/systemd/spotifypod-portal.service" /etc/systemd/system/spotifypod-portal.service
+sed "s/__UID__/${SPOTIFYPOD_UID}/g" "${SCRIPT_DIR}/systemd/spotifypod-portal.service" \
+  > /etc/systemd/system/spotifypod-portal.service
+chmod 644 /etc/systemd/system/spotifypod-portal.service
 systemctl daemon-reload
 # Note: no pigpiod. click.c links libpigpio directly and owns the GPIO hardware
 # itself; a running daemon would fight it for the DMA/PCM peripherals.
 systemctl disable --now pigpiod 2>/dev/null || true
 systemctl enable click.service go-librespot.service spotifypod.service spotifypod-portal.service
+# Bluetooth speakers: adapter on at boot, radio unblocked
+systemctl enable bluetooth.service 2>/dev/null || true
+rfkill unblock bluetooth 2>/dev/null || true
+if [[ -f /etc/bluetooth/main.conf ]]; then
+  if grep -qE '^\s*#?\s*AutoEnable\s*=' /etc/bluetooth/main.conf; then
+    sed -i -E 's/^\s*#?\s*AutoEnable\s*=.*/AutoEnable=true/' /etc/bluetooth/main.conf
+  else
+    printf '\n[Policy]\nAutoEnable=true\n' >> /etc/bluetooth/main.conf
+  fi
+fi
 systemctl enable NetworkManager || true
 systemctl enable comitup 2>/dev/null || true
 

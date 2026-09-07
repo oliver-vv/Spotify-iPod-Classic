@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>sPot Setup</title>
+  <title>iPod Setup</title>
   <style>
     :root {
       --bg: #191414;
@@ -64,6 +64,23 @@
     }
     ul.status { list-style: none; padding: 0; margin: 0; }
     ul.status li { padding: 0.25rem 0; }
+    button.secondary { background: #444; color: #fff; }
+    button.small { padding: 0.45rem 0.9rem; font-size: 0.9rem; }
+    ul.devices { list-style: none; padding: 0; margin: 0.5rem 0 0; }
+    ul.devices li {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.6rem;
+      padding: 0.6rem 0; border-top: 1px solid #3a3a3a;
+    }
+    ul.devices li:first-child { border-top: 0; }
+    .dev-name { flex: 1 1 12rem; font-weight: 600; }
+    .dev-mac { font-family: ui-monospace, monospace; font-size: 0.8rem; color: var(--muted); }
+    .badge {
+      font-size: 0.75rem; padding: 0.1rem 0.5rem; border-radius: 999px;
+      background: #3a3a3a; color: var(--muted);
+    }
+    .badge.on { background: var(--fg); color: #000; }
+    .actions { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+    .actions form { display: inline; margin: 0; }
   </style>
 </head>
 <body>
@@ -92,7 +109,75 @@
         {% if library %}<span class="ok">ready</span>{% else %}<span class="muted">empty</span>{% endif %}
       </li>
       <li>Sync: <span class="muted">{{ sync.state }} — {{ sync.message }} ({{ sync.pct }}%)</span></li>
+      <li>Audio output:
+        {% if bt.default_sink %}<span class="ok">{{ bt.default_sink.description }}</span>
+        {% elif bt.connected %}<span class="muted">speaker connected, waiting for PipeWire sink…</span>
+        {% else %}<span class="bad">none</span><span class="muted"> — pair a Bluetooth speaker below</span>{% endif %}
+      </li>
     </ul>
+  </div>
+
+  <div class="card" id="bt">
+    <h2>Bluetooth speaker</h2>
+    {% if not bt.available %}
+      <p class="bad">No Bluetooth adapter available.</p>
+      <p class="muted">Check <code>systemctl status bluetooth</code> and <code>rfkill list</code> on the Pi.</p>
+    {% else %}
+      <p class="muted">Put your speaker in pairing mode, then scan. Scanning takes about 8 seconds.</p>
+      <form method="post" action="{{ url_for('bt_scan') }}">
+        <button type="submit">Scan for devices</button>
+      </form>
+      {% if bt.devices %}
+      <ul class="devices">
+        {% for d in bt.devices %}
+        <li>
+          <div class="dev-name">{{ d.label }}<br/><span class="dev-mac">{{ d.mac }}</span></div>
+          {% if d.connected %}<span class="badge on">connected</span>
+          {% elif d.paired %}<span class="badge">paired</span>{% endif %}
+          <div class="actions">
+            {% if d.connected %}
+              <form method="post" action="{{ url_for('bt_disconnect') }}">
+                <input type="hidden" name="mac" value="{{ d.mac }}" />
+                <button class="secondary small" type="submit">Disconnect</button>
+              </form>
+            {% elif d.paired %}
+              <form method="post" action="{{ url_for('bt_connect') }}">
+                <input type="hidden" name="mac" value="{{ d.mac }}" />
+                <button class="small" type="submit">Connect</button>
+              </form>
+            {% else %}
+              <form method="post" action="{{ url_for('bt_pair') }}">
+                <input type="hidden" name="mac" value="{{ d.mac }}" />
+                <button class="small" type="submit">Pair &amp; connect</button>
+              </form>
+            {% endif %}
+            {% if d.paired %}
+              <form method="post" action="{{ url_for('bt_forget') }}"
+                    onsubmit="return confirm('Forget {{ d.label|e }}?');">
+                <input type="hidden" name="mac" value="{{ d.mac }}" />
+                <button class="secondary small" type="submit">Forget</button>
+              </form>
+            {% endif %}
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="muted">No devices known yet.</p>
+      {% endif %}
+
+      {% if bt.sinks|length > 1 %}
+      <h2 style="font-size:1rem">Audio output</h2>
+      <form method="post" action="{{ url_for('audio_default') }}">
+        <select name="sink" style="padding:0.6rem;border-radius:8px;background:#111;color:#fff;border:1px solid #444">
+          {% for s in bt.sinks %}
+          <option value="{{ s.id }}" {% if s.default %}selected{% endif %}>{{ s.description }}</option>
+          {% endfor %}
+        </select>
+        <button class="small" type="submit">Use as output</button>
+      </form>
+      {% endif %}
+    {% endif %}
   </div>
 
   <div class="card">

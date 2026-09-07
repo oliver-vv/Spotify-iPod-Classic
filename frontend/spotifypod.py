@@ -11,7 +11,9 @@ from view_model import *
 from PIL import ImageTk, Image
 from sys import platform
 import os
+import threading
 import setup_state
+import bt_manager
 
 try:
     import segno
@@ -707,6 +709,9 @@ def app_main_loop():
         pass
     finally:
         app.after(2, app_main_loop)
+
+# Reconnect trusted Bluetooth speakers in the background (never blocks the UI)
+threading.Thread(target=bt_manager.auto_connect, daemon=True).start()
 
 maybe_render_setup(app)
 if _setup_ready:

@@ -105,7 +105,8 @@ The iPod screen walks you through setup with QR codes:
 1. **Wi‑Fi** — If offline, comitup raises hotspot `iPod-<nnn>`. Scan the Wi‑Fi QR (or join manually). Captive portal at `http://10.41.0.1` lets you pick your home network.  
 2. **Spotify Connect** — In the Spotify phone app, transfer playback to device **`iPod`**. Credentials persist on disk.  
 3. **Link library** — Scan the QR for `http://ipod.local` (or the Pi’s IP). Tap **Authorize with Spotify**. The HTTPS GitHub Pages page relays `code` back to the Pi. If that fails, use **Paste redirect URL**.  
-4. Library sync starts automatically; then the classic sPot menu appears.
+4. Library sync starts automatically; then the classic sPot menu appears.  
+5. **Bluetooth speaker** — on `http://ipod.local`, put your speaker in pairing mode, tap **Scan for devices**, then **Pair & connect**. The speaker is trusted and reconnected automatically on later boots; PipeWire routes go-librespot's output to it.
 
 Services (systemd):
 
