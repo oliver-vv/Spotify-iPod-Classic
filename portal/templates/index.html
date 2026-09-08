@@ -92,7 +92,7 @@
 </head>
 <body>
   <h1>iPod Setup</h1>
-  <p class="muted">Configure Wi‑Fi (via comitup), Spotify Connect, and library access for your iPod.</p>
+  <!-- <p class="muted">Configure Wi‑Fi (via comitup), Spotify Connect, and library access for your iPod.</p> -->
 
   {% if error %}
   <div class="error">{{ error }}</div>
@@ -122,7 +122,7 @@
 
   <div class="card" id="bt">
     <h2>Bluetooth speaker</h2>
-    <p class="muted">Put your speaker in pairing mode, then scan. Speakers show up with their name while scanning; entries with only an address are usually phones or TVs nearby.</p>
+    <p class="muted">Put your device in pairing mode, then click "Scan for devices".</p>
     <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
       <button id="bt-scan" type="button" onclick="btScan()">Scan for devices</button>
       <span id="bt-scan-state" class="muted"></span>
@@ -162,7 +162,7 @@
 
   <div class="card" id="power">
     <h2>Power</h2>
-    <p class="muted">Shut down cleanly before switching the iPod off: cutting power mid-write can corrupt the SD card. After shutdown the Pi stays off until power is removed and re-applied.</p>
+    <p class="muted">Shut down cleanly before switching the iPod off.</p>
     <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
       <button id="power-shutdown" type="button" class="secondary" onclick="powerAction('shutdown')">Shut down</button>
       <button id="power-reboot" type="button" class="secondary" onclick="powerAction('reboot')">Reboot</button>

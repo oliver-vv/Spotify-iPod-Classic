@@ -23,3 +23,5 @@ python3 spotifypod.py
 ```
 
 On macOS the window is 320×240; use arrow keys. Playback needs go-librespot (`GO_LIBRESPOT_URL`, default `http://127.0.0.1:3678`).
+
+Menu / Now Playing layout inspired by Guy Dupont’s sPot UI; see the root README credits.
