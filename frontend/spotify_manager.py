@@ -456,21 +456,28 @@ def _refresh_data_locked(full: bool):
                 break
         print("Spotify artists fetched:", DATASTORE.getArtistCount())
 
+        # Owned + followed playlists only (Spotify Web API). Does not include
+        # phone-only "Made for you" hubs or Radio stations unless followed.
         _set_sync("running", "Playlists…", 40)
         results = client.current_user_playlists(limit=pageSize)
         totalindex = 0
         while True:
             offset = results.get("offset", 0)
-            for idx, item in enumerate(results["items"]):
-                track_count = item.get("tracks", {}).get("total") or 0
+            for idx, item in enumerate(results.get("items") or []):
+                if not item or not item.get("uri"):
+                    continue
+                track_count = (item.get("tracks") or {}).get("total") or 0
+                owner = ((item.get("owner") or {}).get("display_name")
+                         or (item.get("owner") or {}).get("id") or "?")
                 pl = UserPlaylist(item["name"], totalindex, item["uri"], track_count)
                 if full:
                     tracks = get_playlist_tracks(item["id"])
                     if tracks:
                         pl.track_count = len(tracks)
-                    DATASTORE.setPlaylist(pl, tracks, index=idx + offset)
+                    DATASTORE.setPlaylist(pl, tracks, index=totalindex)
                 else:
-                    DATASTORE.setPlaylist(pl, None, index=idx + offset)
+                    DATASTORE.setPlaylist(pl, None, index=totalindex)
+                print(f"  playlist[{totalindex}] {item.get('name')!r} owner={owner}")
                 totalindex += 1
             _page_progress("Playlists", results, 40, 25)
             if results.get("next"):

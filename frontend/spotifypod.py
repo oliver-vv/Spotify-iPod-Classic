@@ -41,12 +41,12 @@ PREV_KEY_CODE = 2818092 if platform == "darwin" else 0
 NEXT_KEY_CODE = 3080238 if platform == "darwin" else 0
 PLAY_KEY_CODE = 3211296 if platform == "darwin" else 0
 
-# Seconds of wheel inactivity before the display is blanked (DPMS). 0 = never
-# (default: the iPod stays on for as long as it is powered).
+# Seconds of wheel inactivity before the display is blanked (DPMS) to reduce
+# burn-in risk on the SPI panel. 0 = never. Override via SCREEN_TIMEOUT_SECONDS.
 try:
-    SCREEN_TIMEOUT_SECONDS = int(os.environ.get("SCREEN_TIMEOUT_SECONDS", "0") or 0)
+    SCREEN_TIMEOUT_SECONDS = int(os.environ.get("SCREEN_TIMEOUT_SECONDS", "60") or 0)
 except ValueError:
-    SCREEN_TIMEOUT_SECONDS = 0
+    SCREEN_TIMEOUT_SECONDS = 60
 
 # Safety margin applied when the UI is scaled down to fit the panel height
 # (fitting is measured, not guessed; see tkinterApp._fit()).
